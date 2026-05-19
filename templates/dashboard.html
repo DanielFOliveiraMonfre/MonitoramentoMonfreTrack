@@ -1,0 +1,68 @@
+{% extends "base.html" %}
+
+{% block title %}Dashboard principal{% endblock %}
+
+{% block content %}
+<section class="metrics-grid">
+    <article class="metric">
+        <span class="metric-label">Online</span>
+        <strong id="metric-online">0</strong>
+        <small>programas abertos agora</small>
+    </article>
+    <article class="metric">
+        <span class="metric-label">Offline</span>
+        <strong id="metric-offline">0</strong>
+        <small>operadores cadastrados sem heartbeat</small>
+    </article>
+    <article class="metric">
+        <span class="metric-label">Alertas tratados</span>
+        <strong id="metric-tratados">0</strong>
+        <small>somente contador do dia</small>
+    </article>
+    <article class="metric accent">
+        <span class="metric-label">Fadigas abertas</span>
+        <strong id="metric-fadigas">0</strong>
+        <small>ocorrências em acompanhamento</small>
+    </article>
+</section>
+
+<section class="panel turnos-panel">
+    <div class="panel-head">
+        <div>
+            <h2>Visão por turno</h2>
+            <p>T1, T2 e T3 com online, tratados, fadigas e pendências.</p>
+        </div>
+    </div>
+    <div class="turnos-grid" id="turnos-grid">
+        <div class="empty-block">Aguardando dados dos turnos.</div>
+    </div>
+</section>
+
+<section class="dashboard-grid">
+    <div class="panel">
+        <div class="panel-head">
+            <div>
+                <h2>Operadores</h2>
+                <p>Cards interativos com status e performance do dia.</p>
+            </div>
+        </div>
+        <div class="operator-grid" id="operadores-grid">
+            <div class="empty-block">Carregando operadores.</div>
+        </div>
+    </div>
+
+    <div class="panel">
+        <div class="panel-head">
+            <div>
+                <h2>Ocorrências abertas</h2>
+                <p>Fadiga sobe com os dados completos disponíveis.</p>
+            </div>
+            <a class="text-link" href="/operacao">Abrir fila</a>
+        </div>
+
+        <div class="occurrence-list compact" id="ocorrencias-resumo">
+            <div class="empty-block">Nenhuma ocorrência aberta.</div>
+        </div>
+    </div>
+</section>
+{% endblock %}

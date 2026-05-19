@@ -1,0 +1,72 @@
+<!doctype html>
+<html lang="pt-br">
+<head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>MonfreTrack Central</title>
+    <link rel="stylesheet" href="{{ url_for('static', filename='app.css') }}">
+</head>
+<body data-page="{{ pagina }}" data-user="{{ usuario_atual.nome if usuario_atual else '' }}" data-admin="{{ 1 if usuario_atual and usuario_atual.admin else 0 }}">
+    <aside class="sidebar">
+        <div class="brand">
+            <img class="brand-logo" src="{{ url_for('logo') }}" alt="MonfreTrack">
+            <div>
+                <strong>MonfreTrack</strong>
+                <span>{{ "Admin" if usuario_atual and usuario_atual.admin else "Operador" }}</span>
+            </div>
+        </div>
+
+        <nav class="nav">
+            {% if usuario_atual and usuario_atual.admin %}
+            <a href="/dashboard" class="{% if pagina == 'dashboard' %}active{% endif %}">
+                <span class="nav-icon">▦</span>
+                Supervisão
+            </a>
+            <a href="/operacao" class="{% if pagina == 'operacao' %}active{% endif %}">
+                <span class="nav-icon">◉</span>
+                Ocorrências
+            </a>
+            {% else %}
+            <a href="/minha-operacao" class="{% if pagina == 'minha_operacao' %}active{% endif %}">
+                <span class="nav-icon">✎</span>
+                Minha operação
+            </a>
+            {% endif %}
+            <a href="/troca-turno" class="{% if pagina == 'troca_turno' %}active{% endif %}">
+                <span class="nav-icon">↗</span>
+                Troca de turno
+            </a>
+        </nav>
+
+        <div class="sidebar-foot">
+            <span class="pulse"></span>
+            <span id="sidebar-status">Conectando</span>
+        </div>
+    </aside>
+
+    <main class="main">
+        <header class="topbar">
+            <div>
+                <p class="eyebrow">Central em tempo real</p>
+                <h1>{% block title %}{% endblock %}</h1>
+            </div>
+
+            <div class="top-actions">
+                <div class="user-chip">{{ usuario_atual.nome if usuario_atual else "-" }}</div>
+                <div class="clock" id="clock">--:--:--</div>
+                <a class="logout-button" href="/logout">Sair</a>
+            </div>
+        </header>
+
+        {% block content %}{% endblock %}
+    </main>
+
+    <script>
+        window.MONFRETRACK_USER = {
+            nome: "{{ usuario_atual.nome if usuario_atual else '' }}",
+            admin: {{ "true" if usuario_atual and usuario_atual.admin else "false" }}
+        };
+    </script>
+    <script src="{{ url_for('static', filename='app.js') }}"></script>
+</body>
+</html>

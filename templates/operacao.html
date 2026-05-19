@@ -1,0 +1,43 @@
+{% extends "base.html" %}
+
+{% block title %}Ocorrências{% endblock %}
+
+{% block content %}
+<section class="operation-toolbar">
+    <div class="segmented">
+        <button class="segment active" data-filter="todas">Todas</button>
+        <button class="segment" data-filter="ABERTA">Abertas</button>
+        <button class="segment" data-filter="EM_ACOMPANHAMENTO">Acompanhamento</button>
+        <button class="segment" data-filter="FINALIZADA">Finalizadas</button>
+    </div>
+</section>
+
+<section class="operation-layout">
+    <div class="panel operation-list-panel">
+        <div class="panel-head">
+            <div>
+                <h2>Fila operacional</h2>
+                <p>Eventos enviados pelo MonfreTrack dos operadores.</p>
+            </div>
+        </div>
+
+        <div class="occurrence-list" id="ocorrencias-operacao">
+            <div class="empty-block">Nenhuma ocorrência registrada.</div>
+        </div>
+    </div>
+
+    <div class="panel detail-panel">
+        <div class="panel-head">
+            <div>
+                <h2>Tratativa</h2>
+                <p>Atualize status e anexe observações da ocorrência.</p>
+            </div>
+        </div>
+
+        <div id="detail-box" class="detail-box empty-detail">
+            <strong>Nenhuma ocorrência selecionada</strong>
+            <span>A fila será atualizada automaticamente.</span>
+        </div>
+    </div>
+</section>
+{% endblock %}

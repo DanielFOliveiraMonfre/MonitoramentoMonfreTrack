@@ -1,0 +1,71 @@
+{% extends "base.html" %}
+
+{% block title %}Troca de turno{% endblock %}
+
+{% block content %}
+<section class="handover-layout chat-layout">
+    <div class="panel">
+        <div class="panel-head">
+            <div>
+                <h2>Ocorrências abertas</h2>
+                <p>Clique para anexar o chat de repasse. Mostra quem está tratando.</p>
+            </div>
+        </div>
+        <div class="handover-list" id="handover-pending">
+            <div class="empty-block">Carregando pendências.</div>
+        </div>
+    </div>
+
+    <div class="panel">
+        <div class="panel-head">
+            <div>
+                <h2>Chat de repasse</h2>
+                <p>Observações em formato de conversa, como Teams/WhatsApp.</p>
+            </div>
+        </div>
+
+        <form class="handover-new" id="handover-occurrence-form">
+            <label>
+                Anexar nova ocorrência aberta
+                <select id="handover-new-type">
+                    <option value="FADIGA">Fadiga</option>
+                    <option value="OPERACIONAL">Operacional</option>
+                    <option value="CONTATO">Contato</option>
+                    <option value="OUTRA">Outra</option>
+                </select>
+            </label>
+            <label>
+                Quem está tratando
+                <input id="handover-new-owner" value="{{ usuario_atual.nome }}">
+            </label>
+            <label class="full">
+                Observação inicial
+                <textarea id="handover-new-message" rows="3" placeholder="Ex: motorista não atendeu, líder ciente, aguardar retorno..."></textarea>
+            </label>
+            <button class="primary-button" type="submit">Anexar ocorrência em aberto</button>
+        </form>
+
+        <div class="handover-compose">
+            <label>
+                Operador
+                <input id="handover-operator" value="{{ usuario_atual.nome }}">
+            </label>
+            <label>
+                Referência
+                <select id="handover-reference">
+                    <option value="GERAL">Geral</option>
+                </select>
+            </label>
+            <label>
+                Mensagem
+                <textarea id="handover-message" rows="3" placeholder="Escreva uma observação para o repasse."></textarea>
+            </label>
+            <button class="primary-button" id="handover-send" type="button">Enviar mensagem</button>
+        </div>
+
+        <div class="handover-chat" id="handover-chat">
+            <div class="empty-block">Nenhuma observação anexada.</div>
+        </div>
+    </div>
+</section>
+{% endblock %}

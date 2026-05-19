@@ -1,0 +1,115 @@
+{% extends "base.html" %}
+
+{% block title %}Minha operação{% endblock %}
+
+{% block content %}
+<section class="metrics-grid user-metrics">
+    <article class="metric">
+        <span class="metric-label">Online agora</span>
+        <strong id="metric-online">0</strong>
+        <small>operadores com programa aberto</small>
+    </article>
+    <article class="metric">
+        <span class="metric-label">Alertas tratados</span>
+        <strong id="metric-tratados">0</strong>
+        <small>contador geral do dia</small>
+    </article>
+    <article class="metric accent">
+        <span class="metric-label">Fadigas abertas</span>
+        <strong id="metric-fadigas">0</strong>
+        <small>fila operacional</small>
+    </article>
+    <article class="metric">
+        <span class="metric-label">Meu acesso</span>
+        <strong class="small-metric">{{ usuario_atual.nome }}</strong>
+        <small>perfil de operador</small>
+    </article>
+</section>
+
+<section class="panel">
+    <div class="panel-head">
+        <div>
+            <h2>Usuários online</h2>
+            <p>Todos os operadores aparecem aqui, com status do app e turno.</p>
+        </div>
+    </div>
+    <div class="operator-grid" id="operadores-grid">
+        <div class="empty-block">Carregando operadores.</div>
+    </div>
+</section>
+
+<section class="user-grid">
+    <div class="panel">
+        <div class="panel-head">
+            <div>
+                <h2>Anexar ocorrência aberta</h2>
+                <p>Use quando algo precisar entrar no acompanhamento ou repasse.</p>
+            </div>
+        </div>
+
+        <form class="quick-form" id="user-occurrence-form">
+            <label>
+                Tipo
+                <select id="user-occurrence-type">
+                    <option value="FADIGA">Fadiga</option>
+                    <option value="OPERACIONAL">Operacional</option>
+                    <option value="CONTATO">Contato</option>
+                    <option value="OUTRA">Outra</option>
+                </select>
+            </label>
+            <label>
+                Status
+                <select id="user-occurrence-status">
+                    <option value="ABERTA">Aberta</option>
+                    <option value="EM_CONTATO">Em contato</option>
+                    <option value="EM_ACOMPANHAMENTO">Acompanhamento</option>
+                </select>
+            </label>
+            <label class="full">
+                Observação inicial
+                <textarea id="user-occurrence-note" rows="4" placeholder="Descreva a ocorrência, pendência ou orientação."></textarea>
+            </label>
+            <button class="primary-button" type="submit">Anexar ocorrência</button>
+        </form>
+    </div>
+
+    <div class="panel">
+        <div class="panel-head">
+            <div>
+                <h2>Resumo por turno</h2>
+                <p>Visão simples para acompanhamento.</p>
+            </div>
+        </div>
+        <div class="turnos-grid compact-turnos" id="turnos-grid">
+            <div class="empty-block">Aguardando turnos.</div>
+        </div>
+    </div>
+</section>
+
+<section class="operation-layout">
+    <div class="panel operation-list-panel">
+        <div class="panel-head">
+            <div>
+                <h2>Ocorrências abertas</h2>
+                <p>Itens com observações aparecem com indicador.</p>
+            </div>
+        </div>
+        <div class="occurrence-list" id="ocorrencias-operacao">
+            <div class="empty-block">Nenhuma ocorrência aberta.</div>
+        </div>
+    </div>
+
+    <div class="panel detail-panel">
+        <div class="panel-head">
+            <div>
+                <h2>Observações</h2>
+                <p>Selecione uma ocorrência para complementar.</p>
+            </div>
+        </div>
+        <div id="detail-box" class="detail-box empty-detail">
+            <strong>Nenhuma ocorrência selecionada</strong>
+            <span>A fila será atualizada automaticamente.</span>
+        </div>
+    </div>
+</section>
+{% endblock %}
