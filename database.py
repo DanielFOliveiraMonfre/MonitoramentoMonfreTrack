@@ -112,36 +112,36 @@ def resolver_monfretrack_db():
 
 def validar_login(nome, senha):
     nome = (nome or "").strip().lower()
+    senha = str(senha or "").strip()
 
-    if not nome or not senha:
-        return None
+    usuarios = {
+        "daniel.oliveira": {"senha": "789456", "admin": True},
+        "william.santos": {"senha": "564208", "admin": True},
+        "aurelio.elizei": {"senha": "830471", "admin": True},
 
-    conn = get_monfre_conn()
-    if not conn:
-        return None
+        "nathan.peres": {"senha": "604913", "admin": False},
+        "holly.canedo": {"senha": "275840", "admin": False},
+        "reginaldo.reis": {"senha": "918362", "admin": False},
 
-    try:
-        row = conn.execute(
-            """
-            SELECT nome, admin
-              FROM usuarios
-             WHERE nome = ?
-               AND senha_hash = ?
-               AND ativo = 1
-            """,
-            (nome, hash_senha(senha)),
-        ).fetchone()
-    finally:
-        conn.close()
+        "matheus.ribeiro": {"senha": "482913", "admin": False},
+        "amanda.malta": {"senha": "739204", "admin": False},
+        "andreia.oliveira": {"senha": "158672", "admin": False},
+        "delton.braga": {"senha": "904381", "admin": False},
+        "filipe.brito": {"senha": "627490", "admin": False},
+        "julia.cassani": {"senha": "315846", "admin": False},
+        "edjairo.pereira": {"senha": "806157", "admin": False},
+        "tiago.fernandes": {"senha": "291638", "admin": False},
+    }
 
-    if not row:
+    usuario = usuarios.get(nome)
+
+    if not usuario or usuario["senha"] != senha:
         return None
 
     return {
-        "nome": row["nome"],
-        "admin": bool(row["admin"]),
+        "nome": nome,
+        "admin": usuario["admin"],
     }
-
 
 def listar_usuarios_cadastrados():
     conn = get_monfre_conn()
