@@ -159,7 +159,13 @@ def api_alerta_tratado():
 @app.get("/api/ocorrencias")
 def api_listar_ocorrencias():
     abertas = request.args.get("abertas") == "1"
-    return jsonify({"ocorrencias": database.listar_ocorrencias(apenas_abertas=abertas)})
+    finalizadas = request.args.get("finalizadas") == "1"
+    return jsonify({
+        "ocorrencias": database.listar_ocorrencias(
+            apenas_abertas=abertas,
+            apenas_finalizadas=finalizadas,
+        )
+    })
 
 
 @app.post("/api/ocorrencias")
@@ -182,6 +188,7 @@ def api_atualizar_ocorrencia(ocorrencia_id):
 def api_iniciar_timer(ocorrencia_id):
     payload = request.get_json(silent=True) or {}
     minutos = int(payload.get("minutos") or 10)
+    minutos = max(5, min(30, minutos))
     database.iniciar_timer_ocorrencia(ocorrencia_id, minutos)
     return jsonify({"ok": True, "ocorrencia_id": ocorrencia_id})
 

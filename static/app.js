@@ -7,11 +7,16 @@ const state = {
     occurrenceDrafts: {},
     handoverDraft: "",
     handoverReference: "GERAL",
+    notifiedTimers: new Set(),
 };
 
 const currentUser = window.MONFRETRACK_USER || {nome: "daniel.oliveira", admin: false};
 const DEFAULT_OPERATOR = currentUser.nome || "daniel.oliveira";
 const qs = (selector) => document.querySelector(selector);
+
+function isEditingOccurrenceNote() {
+    return document.activeElement && document.activeElement.id === "occurrence-note";
+}
 
 function setClock() {
     const el = qs("#clock");
@@ -43,7 +48,7 @@ function escapeHtml(value) {
 }
 
 function rolePill(op) {
-    return `<span class="role-pill ${op.admin ? "" : "user"}">${op.admin ? "Admin" : "Usuario"}</span>`;
+    return `<span class="role-pill ${op.admin ? "admin" : "user"}">${op.admin ? "Admin" : "Usuario"}</span>`;
 }
 
 function operatorCard(op) {
@@ -85,8 +90,26 @@ function renderOperators(data) {
     if (!grid) return;
 
     const operadores = data.operadores || [];
-    grid.innerHTML = operadores.length
-        ? operadores.map(operatorCard).join("")
+    const ordem = ["T1", "T2", "T3", "ADM"];
+    const grupos = ordem
+        .map((turno) => ({
+            turno,
+            operadores: operadores.filter((op) => (op.turno || "T3") === turno),
+        }))
+        .filter((grupo) => grupo.operadores.length);
+
+    grid.innerHTML = grupos.length
+        ? grupos.map((grupo) => `
+            <section class="operator-turno-group">
+                <div class="operator-turno-head">
+                    <strong>${grupo.turno}</strong>
+                    <span>${grupo.operadores.filter((op) => op.online).length}/${grupo.operadores.length} online</span>
+                </div>
+                <div class="operator-turno-grid">
+                    ${grupo.operadores.map(operatorCard).join("")}
+                </div>
+            </section>
+        `).join("")
         : `<div class="empty-block">Nenhum operador cadastrado.</div>`;
 
     grid.querySelectorAll(".operator-card").forEach((card) => {
@@ -102,7 +125,7 @@ function renderOperators(data) {
         button.addEventListener("click", () => {
             state.filter = "todas";
             state.selectedOccurrenceId = null;
-            const ocorrencias = (data.ocorrencias_abertas || []).filter((oc) => oc.operador === button.dataset.operatorFilter);
+            const ocorrencias = (data.ocorrencias_operacao || data.ocorrencias_abertas || []).filter((oc) => oc.operador === button.dataset.operatorFilter);
             const lista = qs("#ocorrencias-operacao") || qs("#ocorrencias-resumo");
             if (lista) {
                 lista.innerHTML = ocorrencias.length
@@ -115,6 +138,9 @@ function renderOperators(data) {
 
 function turnoCard(turno) {
     const pct = Math.min(100, Math.round((turno.online / Math.max(1, turno.total)) * 100));
+    const predominante = turno.alerta_predominante && turno.alerta_predominante !== "-"
+        ? `${statusLabel(turno.alerta_predominante)} (${turno.alerta_predominante_qtd || 0})`
+        : "-";
 
     return `
         <article class="turno-card">
@@ -127,7 +153,7 @@ function turnoCard(turno) {
                 <div><span>Tratados</span><b>${turno.tratados_hoje}</b></div>
                 <div><span>Fadigas</span><b>${turno.fadigas_abertas}</b></div>
                 <div><span>Pendências</span><b>${turno.ocorrencias_abertas}</b></div>
-                <div><span>Média</span><b>${turno.produtividade}</b></div>
+                <div><span>Predominante</span><b>${predominante}</b></div>
             </div>
         </article>
     `;
@@ -142,6 +168,34 @@ function renderTurnos(data) {
         : `<div class="empty-block">Nenhum turno carregado.</div>`;
 }
 
+function predominanceCard(turno) {
+    const tipos = turno.alertas_por_tipo || [];
+    return `
+        <article class="predominance-card">
+            <div>
+                <strong>${turno.turno}</strong>
+                <span>Alerta predominante</span>
+            </div>
+            <b>${turno.alerta_predominante && turno.alerta_predominante !== "-" ? statusLabel(turno.alerta_predominante) : "-"}</b>
+            <small>${turno.alerta_predominante_qtd || 0} registros hoje</small>
+            <div class="predominance-types">
+                ${tipos.length ? tipos.slice(0, 4).map((item) => `
+                    <span>${statusLabel(item.tipo)} <strong>${item.total}</strong></span>
+                `).join("") : `<span>Sem alertas tratados</span>`}
+            </div>
+        </article>
+    `;
+}
+
+function renderPredominance(data) {
+    const grid = qs("#predominance-grid");
+    if (!grid) return;
+
+    grid.innerHTML = (data.turnos || []).length
+        ? data.turnos.map(predominanceCard).join("")
+        : `<div class="empty-block">Nenhum alerta tratado hoje.</div>`;
+}
+
 function occurrenceBadge(oc) {
     const cls = oc.status === "FINALIZADA" ? "online" :
         oc.status === "EM_ACOMPANHAMENTO" ? "running" :
@@ -153,8 +207,7 @@ function occurrenceBadge(oc) {
 
 function occurrenceTitle(oc) {
     if (isFadiga(oc)) {
-        const placa = oc.placa && oc.placa !== "-" ? ` / ${oc.placa}` : "";
-        return `FADIGA #${oc.id}${placa}`;
+        return "OCORRÊNCIA DE FADIGA";
     }
 
     return `${statusLabel(oc.tipo || "OCORRENCIA")} #${oc.id}`;
@@ -162,8 +215,7 @@ function occurrenceTitle(oc) {
 
 function occurrenceSubtitle(oc) {
     if (isFadiga(oc)) {
-        const motorista = oc.motorista && oc.motorista !== "Nao informado" ? oc.motorista : "Motorista não informado";
-        return `${motorista} / tratando: ${oc.operador || "-"}`;
+        return `Tratando: ${oc.operador || "-"} / ${oc.maquina || "-"}`;
     }
 
     return `Tratando: ${oc.operador || "-"} / ${oc.maquina || "-"}`;
@@ -179,6 +231,14 @@ function occurrenceCard(oc, compact = false) {
     const fatigueCount = isFadiga(oc) && Number(oc.alertas_qtd || 1) > 1
         ? `<span class="fatigue-count" title="Alertas de fadiga agrupados">x${oc.alertas_qtd}</span>`
         : "";
+    const fatigueInfo = isFadiga(oc)
+        ? `
+            <div class="fatigue-identity">
+                <div><span>Placa</span><strong>${escapeHtml(oc.placa || "-")}</strong></div>
+                <div><span>Motorista</span><strong>${escapeHtml(oc.motorista || "Motorista não informado")}</strong></div>
+            </div>
+        `
+        : "";
 
     return `
         <article class="occurrence-card ${selected}" data-occurrence-id="${oc.id}">
@@ -193,6 +253,7 @@ function occurrenceCard(oc, compact = false) {
                     ${occurrenceBadge(oc)}
                 </div>
             </div>
+            ${fatigueInfo}
             ${compact ? "" : `
                 <div class="timer-track">
                     <div class="timer-fill" style="width:${percent}%"></div>
@@ -226,6 +287,7 @@ function renderDashboard(data) {
 
     renderOperators(data);
     renderTurnos(data);
+    renderPredominance(data);
 }
 
 function filteredOccurrences(ocorrencias) {
@@ -237,7 +299,8 @@ function renderOperation(data) {
     const lista = qs("#ocorrencias-operacao");
     if (!lista) return;
 
-    const ocorrencias = filteredOccurrences(data.ocorrencias_abertas.concat([]));
+    const base = data.ocorrencias_operacao || data.ocorrencias_abertas || [];
+    const ocorrencias = filteredOccurrences(base.concat([]));
     lista.innerHTML = ocorrencias.length
         ? ocorrencias.map((oc) => occurrenceCard(oc, false)).join("")
         : `<div class="empty-block">Nenhuma ocorrência nesta visão.</div>`;
@@ -250,18 +313,25 @@ function renderOperation(data) {
         });
     });
 
+    if (state.selectedOccurrenceId && !ocorrencias.some((oc) => oc.id === state.selectedOccurrenceId)) {
+        state.selectedOccurrenceId = null;
+    }
+
     if (!state.selectedOccurrenceId && ocorrencias.length) {
         state.selectedOccurrenceId = ocorrencias[0].id;
     }
 
-    renderDetail(data);
+    if (!isEditingOccurrenceNote()) {
+        renderDetail(data);
+    }
 }
 
 function renderDetail(data) {
     const box = qs("#detail-box");
     if (!box) return;
 
-    const oc = data.ocorrencias_abertas.find((item) => item.id === state.selectedOccurrenceId);
+    const base = data.ocorrencias_operacao || data.ocorrencias_abertas || [];
+    const oc = base.find((item) => item.id === state.selectedOccurrenceId);
     if (!oc) {
         box.className = "detail-box empty-detail";
         box.innerHTML = `
@@ -294,6 +364,31 @@ function renderDetail(data) {
             </div>
         `
         : "";
+    const finalizada = ["FINALIZADA", "CANCELADA"].includes(String(oc.status || "").toUpperCase());
+    const timerValue = Math.max(5, Math.min(30, Number(oc.timer_minutos || 10)));
+    const actionsHtml = finalizada ? `
+        <div class="finalized-banner">
+            <strong>Ocorrência finalizada</strong>
+            <span>Histórico preservado até ${oc.finalizado_em || oc.atualizado_em || "-"}</span>
+        </div>
+    ` : `
+        <div class="detail-actions">
+            <button class="primary" data-action="contato">Contato feito</button>
+            <button class="warning" data-action="sem-contato">Sem contato</button>
+            <button class="success" data-action="aceitou">Aceitou parar</button>
+            <button class="danger" data-action="recusou">Recusou</button>
+            <button data-action="finalizar">Finalizar</button>
+        </div>
+
+        <div class="timer-picker">
+            <div>
+                <span>Timer de parada</span>
+                <strong id="timer-minutes-label">${timerValue} min</strong>
+            </div>
+            <input id="timer-minutes" type="range" min="5" max="30" step="1" value="${timerValue}">
+            <button class="primary-button" data-action="timer">Iniciar timer</button>
+        </div>
+    `;
 
     box.className = "detail-box";
     box.innerHTML = `
@@ -313,16 +408,10 @@ function renderDetail(data) {
             <div class="detail-row"><span>Parada</span><strong>${statusLabel(oc.parada_status)}</strong></div>
             <div class="detail-row"><span>Timer</span><strong>${oc.timer_restante || "-"}</strong></div>
             <div class="detail-row"><span>Observações</span><strong>${oc.observacoes_qtd || 0}</strong></div>
+            <div class="detail-row"><span>Finalizado em</span><strong>${oc.finalizado_em || "-"}</strong></div>
         </div>
 
-        <div class="detail-actions">
-            <button class="primary" data-action="contato">Contato feito</button>
-            <button class="warning" data-action="sem-contato">Sem contato</button>
-            <button class="success" data-action="aceitou">Aceitou parar</button>
-            <button class="danger" data-action="recusou">Recusou</button>
-            <button data-action="timer10">Timer 10 min</button>
-            <button data-action="finalizar">Finalizar</button>
-        </div>
+        ${actionsHtml}
 
         <div class="note-compose">
             <label>
@@ -340,6 +429,14 @@ function renderDetail(data) {
 
     const noteButton = qs("#send-occurrence-note");
     if (noteButton) noteButton.addEventListener("click", () => sendOccurrenceNote(oc.id));
+
+    const timerRange = qs("#timer-minutes");
+    const timerLabel = qs("#timer-minutes-label");
+    if (timerRange && timerLabel) {
+        timerRange.addEventListener("input", () => {
+            timerLabel.textContent = `${timerRange.value} min`;
+        });
+    }
 
     const noteField = qs("#occurrence-note");
     if (noteField) {
@@ -372,11 +469,13 @@ async function sendOccurrenceNote(id) {
 }
 
 async function handleOccurrenceAction(id, action) {
-    if (action === "timer10") {
+    if (action === "timer") {
+        const timerRange = qs("#timer-minutes");
+        const minutos = Math.max(5, Math.min(30, Number(timerRange ? timerRange.value : 10)));
         await fetch(`/api/ocorrencias/${id}/timer`, {
             method: "POST",
             headers: {"Content-Type": "application/json"},
-            body: JSON.stringify({minutos: 10}),
+            body: JSON.stringify({minutos}),
         });
         return refreshAll();
     }
@@ -396,6 +495,65 @@ async function handleOccurrenceAction(id, action) {
     });
 
     return refreshAll();
+}
+
+function requestNotificationPermission() {
+    if (!("Notification" in window) || Notification.permission !== "default") return;
+    Notification.requestPermission().catch(() => {});
+}
+
+function showToast(message) {
+    let container = qs("#toast-container");
+    if (!container) {
+        container = document.createElement("div");
+        container.id = "toast-container";
+        container.className = "toast-container";
+        document.body.appendChild(container);
+    }
+
+    const toast = document.createElement("article");
+    toast.className = "timer-toast";
+    toast.innerHTML = `
+        <strong>Timer finalizado</strong>
+        <span>${escapeHtml(message)}</span>
+    `;
+    container.appendChild(toast);
+    setTimeout(() => toast.remove(), 14000);
+}
+
+function notifyTimerEnd(oc) {
+    const placa = oc.placa && oc.placa !== "-" ? oc.placa : "placa não informada";
+    const motorista = oc.motorista && oc.motorista !== "Nao informado" ? oc.motorista : "motorista não informado";
+    const minutos = oc.timer_minutos || "-";
+    const message = `Timer de ${minutos} min finalizado | ${placa} | ${motorista} | confirmar parada`;
+
+    showToast(message);
+
+    if ("Notification" in window && Notification.permission === "granted") {
+        const notification = new Notification("MonfreTrack", {
+            body: message,
+            tag: `timer-${oc.id}-${oc.timer_fim || ""}`,
+        });
+        notification.onclick = () => {
+            window.focus();
+            state.selectedOccurrenceId = oc.id;
+            if (state.lastData) renderOperation(state.lastData);
+        };
+    }
+}
+
+function checkTimerNotifications(data) {
+    const ocorrencias = data.ocorrencias_abertas || [];
+    ocorrencias.forEach((oc) => {
+        const vencido = oc.timer_estado === "VENCIDO" || Number(oc.timer_restante_segundos) <= 0;
+        if (!vencido || !oc.timer_fim) return;
+
+        const key = `${oc.id}:${oc.timer_fim}`;
+        if (state.notifiedTimers.has(key)) return;
+
+        state.notifiedTimers.add(key);
+        notifyTimerEnd(oc);
+    });
 }
 
 function pendingCard(item) {
@@ -600,6 +758,7 @@ async function loadData() {
 
         renderDashboard(data);
         renderOperation(data);
+        checkTimerNotifications(data);
     } catch (error) {
         const status = qs("#sidebar-status");
         if (status) status.textContent = "Sem conexão";
@@ -620,6 +779,7 @@ function bindButtons() {
             state.handoverDraft = handoverMessage.value;
         });
     }
+    document.addEventListener("click", requestNotificationPermission, {once: true});
 
     document.querySelectorAll(".segment").forEach((button) => {
         button.addEventListener("click", () => {

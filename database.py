@@ -35,6 +35,23 @@ TURNOS = {
 
 TURNOS_ORDEM = ["T1", "T2", "T3", "ADM"]
 
+USUARIOS_FIXOS = {
+    "daniel.oliveira": {"senha": "789456", "admin": True},
+    "william.santos": {"senha": "564208", "admin": True},
+    "aurelio.elizei": {"senha": "830471", "admin": True},
+    "nathan.peres": {"senha": "604913", "admin": False},
+    "holly.canedo": {"senha": "275840", "admin": False},
+    "reginaldo.reis": {"senha": "918362", "admin": False},
+    "matheus.ribeiro": {"senha": "482913", "admin": False},
+    "amanda.malta": {"senha": "739204", "admin": False},
+    "andreia.oliveira": {"senha": "158672", "admin": False},
+    "delton.braga": {"senha": "904381", "admin": False},
+    "filipe.brito": {"senha": "627490", "admin": False},
+    "julia.cassani": {"senha": "315846", "admin": False},
+    "edjairo.pereira": {"senha": "806157", "admin": False},
+    "tiago.fernandes": {"senha": "291638", "admin": False},
+}
+
 
 def agora_iso():
     return datetime.now().replace(microsecond=0).isoformat(sep=" ")
@@ -113,27 +130,7 @@ def resolver_monfretrack_db():
 def validar_login(nome, senha):
     nome = (nome or "").strip().lower()
     senha = str(senha or "").strip()
-
-    usuarios = {
-        "daniel.oliveira": {"senha": "789456", "admin": True},
-        "william.santos": {"senha": "564208", "admin": True},
-        "aurelio.elizei": {"senha": "830471", "admin": True},
-
-        "nathan.peres": {"senha": "604913", "admin": False},
-        "holly.canedo": {"senha": "275840", "admin": False},
-        "reginaldo.reis": {"senha": "918362", "admin": False},
-
-        "matheus.ribeiro": {"senha": "482913", "admin": False},
-        "amanda.malta": {"senha": "739204", "admin": False},
-        "andreia.oliveira": {"senha": "158672", "admin": False},
-        "delton.braga": {"senha": "904381", "admin": False},
-        "filipe.brito": {"senha": "627490", "admin": False},
-        "julia.cassani": {"senha": "315846", "admin": False},
-        "edjairo.pereira": {"senha": "806157", "admin": False},
-        "tiago.fernandes": {"senha": "291638", "admin": False},
-    }
-
-    usuario = usuarios.get(nome)
+    usuario = USUARIOS_FIXOS.get(nome)
 
     if not usuario or usuario["senha"] != senha:
         return None
@@ -170,6 +167,11 @@ def listar_usuarios_cadastrados():
         ]
 
     nomes = {usuario["nome"] for usuario in usuarios}
+    for nome, dados in USUARIOS_FIXOS.items():
+        if nome not in nomes:
+            usuarios.append({"nome": nome, "admin": dados["admin"], "ativo": True})
+            nomes.add(nome)
+
     for nome in TURNOS:
         if nome not in nomes:
             usuarios.append({"nome": nome, "admin": False, "ativo": True})
@@ -286,20 +288,25 @@ def upsert_operador(operador, maquina, status="ABERTO", versao=None):
 
     with get_conn() as conn:
         existente = conn.execute(
-            "SELECT id FROM operadores WHERE operador = ? AND maquina = ?",
+            "SELECT * FROM operadores WHERE operador = ? AND maquina = ?",
             (operador, maquina),
         ).fetchone()
 
         if existente:
+            ultimo = parse_dt(existente["ultimo_heartbeat"])
+            resetar_abertura = bool(
+                not ultimo or (datetime.now() - ultimo).total_seconds() > 45
+            )
             conn.execute(
                 """
                 UPDATE operadores
                    SET status = ?,
+                       app_aberto_em = CASE WHEN ? THEN ? ELSE app_aberto_em END,
                        ultimo_heartbeat = ?,
                        versao = COALESCE(?, versao)
                  WHERE id = ?
                 """,
-                (status, agora, versao, existente["id"]),
+                (status, 1 if resetar_abertura else 0, agora, agora, versao, existente["id"]),
             )
             return existente["id"]
 
@@ -494,12 +501,13 @@ def atualizar_ocorrencia(ocorrencia_id, payload):
 
 
 def iniciar_timer_ocorrencia(ocorrencia_id, minutos):
+    minutos = max(5, min(30, int(minutos or 10)))
     inicio = datetime.now().replace(microsecond=0)
-    fim = inicio + timedelta(minutes=int(minutos))
+    fim = inicio + timedelta(minutes=minutos)
     atualizar_ocorrencia(
         ocorrencia_id,
         {
-            "timer_minutos": int(minutos),
+            "timer_minutos": minutos,
             "timer_inicio": inicio.isoformat(sep=" "),
             "timer_fim": fim.isoformat(sep=" "),
             "etapa": "ACOMPANHAMENTO",
@@ -842,11 +850,13 @@ def enriquecer_ocorrencia(row):
     return item
 
 
-def listar_ocorrencias(apenas_abertas=False, limite=80):
+def listar_ocorrencias(apenas_abertas=False, apenas_finalizadas=False, limite=80):
     where = ""
     params = []
     if apenas_abertas:
         where = "WHERE o.status NOT IN ('FINALIZADA', 'CANCELADA')"
+    elif apenas_finalizadas:
+        where = "WHERE o.status IN ('FINALIZADA', 'CANCELADA')"
 
     with get_conn() as conn:
         rows = conn.execute(
@@ -868,11 +878,14 @@ def listar_ocorrencias(apenas_abertas=False, limite=80):
                         ORDER BY n.criado_em DESC
                         LIMIT 1
                    ) AS ultima_observacao
-              FROM ocorrencias o
+             FROM ocorrencias o
               {where}
              ORDER BY
                   CASE WHEN o.status IN ('ABERTA', 'EM_CONTATO', 'EM_ACOMPANHAMENTO') THEN 0 ELSE 1 END,
-                  o.atualizado_em DESC
+                  CASE
+                      WHEN o.status IN ('FINALIZADA', 'CANCELADA') THEN COALESCE(o.finalizado_em, o.atualizado_em)
+                      ELSE o.atualizado_em
+                  END DESC
              LIMIT ?
             """,
             params + [limite],
@@ -881,7 +894,12 @@ def listar_ocorrencias(apenas_abertas=False, limite=80):
     return [enriquecer_ocorrencia(row) for row in rows]
 
 
-def montar_resumo_turnos(operadores, ocorrencias_abertas):
+def listar_ocorrencias_finalizadas(limite=120):
+    return listar_ocorrencias(apenas_finalizadas=True, limite=limite)
+
+
+def montar_resumo_turnos(operadores, ocorrencias_abertas, alertas_por_turno=None):
+    alertas_por_turno = alertas_por_turno or {}
     turnos = {
         turno: {
             "turno": turno,
@@ -892,7 +910,9 @@ def montar_resumo_turnos(operadores, ocorrencias_abertas):
             "tratados_hoje": 0,
             "ocorrencias_abertas": 0,
             "fadigas_abertas": 0,
-            "produtividade": 0,
+            "alerta_predominante": "-",
+            "alerta_predominante_qtd": 0,
+            "alertas_por_tipo": [],
         }
         for turno in TURNOS_ORDEM
     }
@@ -909,7 +929,9 @@ def montar_resumo_turnos(operadores, ocorrencias_abertas):
                 "tratados_hoje": 0,
                 "ocorrencias_abertas": 0,
                 "fadigas_abertas": 0,
-                "produtividade": 0,
+                "alerta_predominante": "-",
+                "alerta_predominante_qtd": 0,
+                "alertas_por_tipo": [],
             }
 
         turnos[turno]["operadores"].append(operador)
@@ -927,15 +949,51 @@ def montar_resumo_turnos(operadores, ocorrencias_abertas):
         if str(ocorrencia.get("tipo") or "").upper() == "FADIGA":
             turnos[turno]["fadigas_abertas"] += 1
 
-    for turno in turnos.values():
-        turno["produtividade"] = round(turno["tratados_hoje"] / max(1, turno["total"]), 1)
+    for nome_turno, turno in turnos.items():
+        tipos = alertas_por_turno.get(nome_turno, {})
+        ordenados = sorted(tipos.items(), key=lambda item: item[1], reverse=True)
+        turno["alertas_por_tipo"] = [
+            {"tipo": tipo, "total": total}
+            for tipo, total in ordenados
+        ]
+        if ordenados:
+            turno["alerta_predominante"] = ordenados[0][0]
+            turno["alerta_predominante_qtd"] = ordenados[0][1]
 
     return [turnos[turno] for turno in TURNOS_ORDEM if turno in turnos]
+
+
+def contar_alertas_por_turno_hoje():
+    operadores = listar_usuarios_cadastrados()
+    admin_por_nome = {op["nome"]: op.get("admin", False) for op in operadores}
+    resumo = {turno: {} for turno in TURNOS_ORDEM}
+
+    with get_conn() as conn:
+        rows = conn.execute(
+            """
+            SELECT operador, tipo, COUNT(*) AS total
+              FROM alertas_tratados
+             WHERE date(criado_em) = date('now', 'localtime')
+             GROUP BY operador, tipo
+            """
+        ).fetchall()
+
+    for row in rows:
+        operador = row["operador"]
+        turno = turno_operador(operador, admin_por_nome.get(operador, False))
+        if turno not in resumo:
+            resumo[turno] = {}
+
+        tipo = (row["tipo"] or "NAO INFORMADO").upper()
+        resumo[turno][tipo] = resumo[turno].get(tipo, 0) + int(row["total"] or 0)
+
+    return resumo
 
 
 def resumo_dashboard():
     operadores = listar_operadores()
     ocorrencias_abertas = listar_ocorrencias(apenas_abertas=True, limite=30)
+    ocorrencias_finalizadas = listar_ocorrencias_finalizadas(limite=120)
     admins = [op for op in operadores if op.get("admin")]
     usuarios = [op for op in operadores if not op.get("admin")]
 
@@ -959,7 +1017,8 @@ def resumo_dashboard():
 
     online = [op for op in operadores if op["online"]]
     offline = [op for op in operadores if not op["online"]]
-    turnos = montar_resumo_turnos(operadores, ocorrencias_abertas)
+    alertas_por_turno = contar_alertas_por_turno_hoje()
+    turnos = montar_resumo_turnos(operadores, ocorrencias_abertas, alertas_por_turno)
 
     return {
         "agora": agora_iso(),
@@ -973,6 +1032,9 @@ def resumo_dashboard():
         "alertas_tratados_hoje": total_tratados_hoje,
         "fadigas_hoje": fadigas_hoje,
         "ocorrencias_abertas": ocorrencias_abertas,
+        "ocorrencias_finalizadas": ocorrencias_finalizadas,
+        "ocorrencias_operacao": ocorrencias_abertas + ocorrencias_finalizadas,
+        "alertas_por_turno": alertas_por_turno,
     }
 
 
