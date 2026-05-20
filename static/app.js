@@ -21,6 +21,9 @@ function isEditingOccurrenceNote() {
 function setClock() {
     const el = qs("#clock");
     if (el) el.textContent = new Date().toLocaleTimeString("pt-BR");
+
+    const today = qs("#metric-date-today");
+    if (today) today.textContent = new Date().toLocaleDateString("pt-BR");
 }
 
 function statusClass(status, online) {
@@ -168,34 +171,6 @@ function renderTurnos(data) {
         : `<div class="empty-block">Nenhum turno carregado.</div>`;
 }
 
-function predominanceCard(turno) {
-    const tipos = turno.alertas_por_tipo || [];
-    return `
-        <article class="predominance-card">
-            <div>
-                <strong>${turno.turno}</strong>
-                <span>Alerta predominante</span>
-            </div>
-            <b>${turno.alerta_predominante && turno.alerta_predominante !== "-" ? statusLabel(turno.alerta_predominante) : "-"}</b>
-            <small>${turno.alerta_predominante_qtd || 0} registros hoje</small>
-            <div class="predominance-types">
-                ${tipos.length ? tipos.slice(0, 4).map((item) => `
-                    <span>${statusLabel(item.tipo)} <strong>${item.total}</strong></span>
-                `).join("") : `<span>Sem alertas tratados</span>`}
-            </div>
-        </article>
-    `;
-}
-
-function renderPredominance(data) {
-    const grid = qs("#predominance-grid");
-    if (!grid) return;
-
-    grid.innerHTML = (data.turnos || []).length
-        ? data.turnos.map(predominanceCard).join("")
-        : `<div class="empty-block">Nenhum alerta tratado hoje.</div>`;
-}
-
 function occurrenceBadge(oc) {
     const cls = oc.status === "FINALIZADA" ? "online" :
         oc.status === "EM_ACOMPANHAMENTO" ? "running" :
@@ -287,7 +262,6 @@ function renderDashboard(data) {
 
     renderOperators(data);
     renderTurnos(data);
-    renderPredominance(data);
 }
 
 function filteredOccurrences(ocorrencias) {
@@ -498,8 +472,50 @@ async function handleOccurrenceAction(id, action) {
 }
 
 function requestNotificationPermission() {
-    if (!("Notification" in window) || Notification.permission !== "default") return;
-    Notification.requestPermission().catch(() => {});
+    if (!("Notification" in window)) return;
+
+    if (Notification.permission === "default") {
+        Notification.requestPermission()
+            .then(updateNotificationControl)
+            .catch(updateNotificationControl);
+        return;
+    }
+
+    if (Notification.permission === "denied") {
+        showToast("Notificações do navegador estão bloqueadas. Libere nas permissões do site para receber aviso do Windows.");
+    }
+
+    updateNotificationControl();
+}
+
+function notificationLabel() {
+    if (!("Notification" in window)) return "Notif. indisponível";
+    if (Notification.permission === "granted") return "Notificações ON";
+    if (Notification.permission === "denied") return "Notif. bloqueada";
+    return "Ativar notificações";
+}
+
+function updateNotificationControl() {
+    const button = qs("#notification-toggle");
+    if (!button) return;
+
+    button.textContent = notificationLabel();
+    button.classList.toggle("enabled", "Notification" in window && Notification.permission === "granted");
+    button.classList.toggle("blocked", "Notification" in window && Notification.permission === "denied");
+}
+
+function setupNotificationControl() {
+    const topActions = qs(".top-actions");
+    if (!topActions || qs("#notification-toggle")) return;
+
+    const button = document.createElement("button");
+    button.type = "button";
+    button.id = "notification-toggle";
+    button.className = "notification-toggle";
+    button.addEventListener("click", requestNotificationPermission);
+
+    topActions.insertBefore(button, topActions.firstChild);
+    updateNotificationControl();
 }
 
 function showToast(message) {
@@ -533,6 +549,7 @@ function notifyTimerEnd(oc) {
         const notification = new Notification("MonfreTrack", {
             body: message,
             tag: `timer-${oc.id}-${oc.timer_fim || ""}`,
+            requireInteraction: true,
         });
         notification.onclick = () => {
             window.focus();
@@ -779,6 +796,7 @@ function bindButtons() {
             state.handoverDraft = handoverMessage.value;
         });
     }
+    setupNotificationControl();
     document.addEventListener("click", requestNotificationPermission, {once: true});
 
     document.querySelectorAll(".segment").forEach((button) => {

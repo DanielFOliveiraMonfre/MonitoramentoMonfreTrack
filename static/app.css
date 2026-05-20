@@ -259,6 +259,7 @@ button {
 .ghost-button,
 .danger-button,
 .primary-button,
+.notification-toggle,
 .segment {
     min-height: 38px;
     display: inline-flex;
@@ -275,6 +276,24 @@ button {
     color: var(--muted);
     background: var(--surface);
     border: 1px solid var(--line);
+}
+
+.notification-toggle {
+    color: #fff2c2;
+    background: rgba(240, 180, 41, 0.14);
+    border: 1px solid rgba(240, 180, 41, 0.28);
+}
+
+.notification-toggle.enabled {
+    color: #d6ffe9;
+    background: rgba(38, 208, 124, 0.14);
+    border-color: rgba(38, 208, 124, 0.28);
+}
+
+.notification-toggle.blocked {
+    color: #ffd6d9;
+    background: rgba(255, 92, 102, 0.14);
+    border-color: rgba(255, 92, 102, 0.28);
 }
 
 .ghost-button {
@@ -360,10 +379,6 @@ button.danger {
 }
 
 .turnos-panel {
-    margin-bottom: 14px;
-}
-
-.predominance-panel {
     margin-bottom: 14px;
 }
 
@@ -507,55 +522,6 @@ button.danger {
     display: block;
     height: 100%;
     background: linear-gradient(90deg, var(--brand), var(--brand-2));
-}
-
-.predominance-grid {
-    display: grid;
-    grid-template-columns: repeat(auto-fit, minmax(230px, 1fr));
-    gap: 12px;
-    padding: 14px;
-}
-
-.predominance-card {
-    display: grid;
-    gap: 8px;
-    padding: 14px;
-    background: var(--surface-2);
-    border: 1px solid var(--line);
-    border-radius: 8px;
-}
-
-.predominance-card > div:first-child {
-    display: flex;
-    align-items: center;
-    justify-content: space-between;
-    gap: 10px;
-}
-
-.predominance-card > b {
-    color: #fff;
-    font-size: 22px;
-}
-
-.predominance-card small,
-.predominance-card span {
-    color: var(--muted);
-}
-
-.predominance-types {
-    display: flex;
-    flex-wrap: wrap;
-    gap: 8px;
-}
-
-.predominance-types span {
-    display: inline-flex;
-    gap: 6px;
-    padding: 7px 9px;
-    background: #111315;
-    border: 1px solid var(--line);
-    border-radius: 6px;
-    font-size: 12px;
 }
 
 .small-metric {
