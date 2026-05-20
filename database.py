@@ -485,7 +485,15 @@ def atualizar_ocorrencia(ocorrencia_id, payload):
             campos.append(f"{campo} = ?")
             valores.append(valor)
 
-    if payload.get("status", "").upper() in {"FINALIZADA", "CANCELADA"} and "finalizado_em" not in payload:
+    finalizando = str(payload.get("status", "")).upper() in {"FINALIZADA", "CANCELADA"}
+
+    if finalizando:
+        for campo in ("timer_minutos", "timer_inicio", "timer_fim"):
+            if campo not in payload:
+                campos.append(f"{campo} = ?")
+                valores.append(None)
+
+    if finalizando and "finalizado_em" not in payload:
         campos.append("finalizado_em = ?")
         valores.append(agora_iso())
 
@@ -514,6 +522,16 @@ def iniciar_timer_ocorrencia(ocorrencia_id, minutos):
             "status": "EM_ACOMPANHAMENTO",
         },
     )
+
+
+def apagar_ocorrencia(ocorrencia_id):
+    with get_conn() as conn:
+        conn.execute(
+            "DELETE FROM notas_turno WHERE referencia_tipo = 'OCORRENCIA' AND referencia_id = ?",
+            (ocorrencia_id,),
+        )
+        cur = conn.execute("DELETE FROM ocorrencias WHERE id = ?", (ocorrencia_id,))
+        return cur.rowcount
 
 
 def contrato_classe(contrato):
@@ -825,8 +843,10 @@ def listar_operadores(timeout_online=35):
 
 
 def enriquecer_ocorrencia(row):
-    timer_fim = parse_dt(row["timer_fim"])
-    timer_inicio = parse_dt(row["timer_inicio"])
+    item = dict(row)
+    finalizada = str(item.get("status") or "").upper() in {"FINALIZADA", "CANCELADA"}
+    timer_fim = None if finalizada else parse_dt(item["timer_fim"])
+    timer_inicio = None if finalizada else parse_dt(item["timer_inicio"])
     restante = None
     timer_estado = "SEM_TIMER"
 
@@ -839,13 +859,16 @@ def enriquecer_ocorrencia(row):
     if criado:
         duracao_aberta = int((datetime.now() - criado).total_seconds())
 
-    item = dict(row)
     item["alertas_qtd"] = int(item.get("alertas_qtd") or 1)
     item["notas"] = listar_notas_referencia("OCORRENCIA", item["id"], limite=12)
     item["timer_estado"] = timer_estado
     item["timer_restante_segundos"] = restante
     item["timer_restante"] = formatar_timer(restante) if restante is not None else "-"
     item["timer_percentual"] = calcular_percentual_timer(timer_inicio, timer_fim)
+    if finalizada:
+        item["timer_minutos"] = None
+        item["timer_inicio"] = None
+        item["timer_fim"] = None
     item["idade"] = formatar_duracao(duracao_aberta)
     return item
 

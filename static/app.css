@@ -475,10 +475,6 @@ button.danger {
     margin: 12px 0;
 }
 
-.turno-grid {
-    grid-template-columns: repeat(4, minmax(0, 1fr));
-}
-
 .operator-card-stats div,
 .turno-grid div {
     padding: 10px;
@@ -522,6 +518,66 @@ button.danger {
     display: block;
     height: 100%;
     background: linear-gradient(90deg, var(--brand), var(--brand-2));
+}
+
+.predominance-panel {
+    margin-bottom: 14px;
+}
+
+.predominance-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
+    gap: 12px;
+    padding: 14px;
+}
+
+.predominance-card {
+    display: grid;
+    gap: 12px;
+    padding: 14px;
+    background: var(--surface-2);
+    border: 1px solid var(--line);
+    border-radius: 8px;
+}
+
+.predominance-head {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 12px;
+}
+
+.predominance-head strong {
+    font-size: 16px;
+}
+
+.predominance-head span,
+.predominance-card small {
+    color: var(--muted);
+}
+
+.predominance-card > b {
+    font-size: 22px;
+    color: #ffffff;
+}
+
+.predominance-types {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 8px;
+}
+
+.predominance-types span {
+    min-height: 30px;
+    display: inline-flex;
+    align-items: center;
+    gap: 8px;
+    padding: 0 10px;
+    color: #ccefff;
+    background: #111315;
+    border: 1px solid var(--line);
+    border-radius: 6px;
+    font-size: 12px;
 }
 
 .small-metric {
@@ -903,7 +959,8 @@ td small {
 }
 
 .timer-picker,
-.finalized-banner {
+.finalized-banner,
+.admin-danger-zone {
     display: grid;
     gap: 10px;
     padding: 12px;
@@ -911,6 +968,19 @@ td small {
     background: #111315;
     border: 1px solid var(--line);
     border-radius: 6px;
+}
+
+.admin-danger-zone {
+    grid-template-columns: minmax(0, 1fr) auto;
+    align-items: center;
+    border-color: rgba(255, 92, 102, 0.24);
+}
+
+.admin-danger-zone span {
+    display: block;
+    margin-top: 3px;
+    color: var(--muted);
+    font-size: 12px;
 }
 
 .timer-picker > div,

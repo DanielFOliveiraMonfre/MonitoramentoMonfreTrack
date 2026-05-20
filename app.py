@@ -184,6 +184,16 @@ def api_atualizar_ocorrencia(ocorrencia_id):
     return jsonify({"ok": True, "ocorrencia_id": ocorrencia_id})
 
 
+@app.delete("/api/ocorrencias/<int:ocorrencia_id>")
+def api_apagar_ocorrencia(ocorrencia_id):
+    usuario = usuario_logado()
+    if not usuario or not usuario.get("admin"):
+        return jsonify({"ok": False, "erro": "admin_required"}), 403
+
+    apagados = database.apagar_ocorrencia(ocorrencia_id)
+    return jsonify({"ok": True, "ocorrencia_id": ocorrencia_id, "apagados": apagados})
+
+
 @app.post("/api/ocorrencias/<int:ocorrencia_id>/timer")
 def api_iniciar_timer(ocorrencia_id):
     payload = request.get_json(silent=True) or {}

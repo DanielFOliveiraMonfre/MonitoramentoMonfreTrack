@@ -41,6 +41,10 @@ function isFadiga(oc) {
     return String(oc.tipo || "").toUpperCase() === "FADIGA";
 }
 
+function isFinalizedOccurrence(oc) {
+    return ["FINALIZADA", "CANCELADA"].includes(String(oc.status || "").toUpperCase());
+}
+
 function escapeHtml(value) {
     return String(value || "")
         .replaceAll("&", "&amp;")
@@ -141,9 +145,6 @@ function renderOperators(data) {
 
 function turnoCard(turno) {
     const pct = Math.min(100, Math.round((turno.online / Math.max(1, turno.total)) * 100));
-    const predominante = turno.alerta_predominante && turno.alerta_predominante !== "-"
-        ? `${statusLabel(turno.alerta_predominante)} (${turno.alerta_predominante_qtd || 0})`
-        : "-";
 
     return `
         <article class="turno-card">
@@ -156,7 +157,6 @@ function turnoCard(turno) {
                 <div><span>Tratados</span><b>${turno.tratados_hoje}</b></div>
                 <div><span>Fadigas</span><b>${turno.fadigas_abertas}</b></div>
                 <div><span>Pendências</span><b>${turno.ocorrencias_abertas}</b></div>
-                <div><span>Predominante</span><b>${predominante}</b></div>
             </div>
         </article>
     `;
@@ -168,6 +168,40 @@ function renderTurnos(data) {
 
     grid.innerHTML = (data.turnos || []).length
         ? data.turnos.map(turnoCard).join("")
+        : `<div class="empty-block">Nenhum turno carregado.</div>`;
+}
+
+function predominanceCard(turno) {
+    const tipos = Array.isArray(turno.alertas_tipos) ? turno.alertas_tipos : [];
+    const predominante = turno.alerta_predominante && turno.alerta_predominante !== "-"
+        ? statusLabel(turno.alerta_predominante)
+        : "-";
+    const total = Number(turno.alerta_predominante_qtd || 0);
+    const chips = tipos.length
+        ? tipos.slice(0, 4).map((item) => `
+            <span>${statusLabel(item.tipo)} <strong>${item.total}</strong></span>
+        `).join("")
+        : `<span>Sem alertas tratados</span>`;
+
+    return `
+        <article class="predominance-card">
+            <div class="predominance-head">
+                <strong>${turno.turno}</strong>
+                <span>Alerta predominante</span>
+            </div>
+            <b>${predominante}</b>
+            <small>${total} registros hoje</small>
+            <div class="predominance-types">${chips}</div>
+        </article>
+    `;
+}
+
+function renderPredominance(data) {
+    const grid = qs("#predominance-grid");
+    if (!grid) return;
+
+    grid.innerHTML = (data.turnos || []).length
+        ? data.turnos.map(predominanceCard).join("")
         : `<div class="empty-block">Nenhum turno carregado.</div>`;
 }
 
@@ -198,6 +232,7 @@ function occurrenceSubtitle(oc) {
 
 function occurrenceCard(oc, compact = false) {
     const selected = state.selectedOccurrenceId === oc.id ? "selected" : "";
+    const finalizada = isFinalizedOccurrence(oc);
     const timer = oc.timer_restante || "-";
     const percent = oc.timer_percentual || 0;
     const note = Number(oc.observacoes_qtd || 0) > 0
@@ -229,7 +264,7 @@ function occurrenceCard(oc, compact = false) {
                 </div>
             </div>
             ${fatigueInfo}
-            ${compact ? "" : `
+            ${compact || finalizada ? "" : `
                 <div class="timer-track">
                     <div class="timer-fill" style="width:${percent}%"></div>
                 </div>
@@ -262,6 +297,7 @@ function renderDashboard(data) {
 
     renderOperators(data);
     renderTurnos(data);
+    renderPredominance(data);
 }
 
 function filteredOccurrences(ocorrencias) {
@@ -338,8 +374,11 @@ function renderDetail(data) {
             </div>
         `
         : "";
-    const finalizada = ["FINALIZADA", "CANCELADA"].includes(String(oc.status || "").toUpperCase());
+    const finalizada = isFinalizedOccurrence(oc);
     const timerValue = Math.max(5, Math.min(30, Number(oc.timer_minutos || 10)));
+    const timerDetail = finalizada ? "" : `
+        <div class="detail-row"><span>Timer</span><strong>${oc.timer_restante || "-"}</strong></div>
+    `;
     const actionsHtml = finalizada ? `
         <div class="finalized-banner">
             <strong>Ocorrência finalizada</strong>
@@ -363,6 +402,15 @@ function renderDetail(data) {
             <button class="primary-button" data-action="timer">Iniciar timer</button>
         </div>
     `;
+    const adminDeleteHtml = currentUser.admin ? `
+        <div class="admin-danger-zone">
+            <div>
+                <strong>Admin</strong>
+                <span>Apaga esta ocorrência e as observações anexadas.</span>
+            </div>
+            <button class="danger-button" data-action="delete-occurrence">Apagar ocorrência</button>
+        </div>
+    ` : "";
 
     box.className = "detail-box";
     box.innerHTML = `
@@ -380,12 +428,13 @@ function renderDetail(data) {
             <div class="detail-row"><span>Etapa</span><strong>${statusLabel(oc.etapa)}</strong></div>
             <div class="detail-row"><span>Contato</span><strong>${statusLabel(oc.contato_status)}</strong></div>
             <div class="detail-row"><span>Parada</span><strong>${statusLabel(oc.parada_status)}</strong></div>
-            <div class="detail-row"><span>Timer</span><strong>${oc.timer_restante || "-"}</strong></div>
+            ${timerDetail}
             <div class="detail-row"><span>Observações</span><strong>${oc.observacoes_qtd || 0}</strong></div>
             <div class="detail-row"><span>Finalizado em</span><strong>${oc.finalizado_em || "-"}</strong></div>
         </div>
 
         ${actionsHtml}
+        ${adminDeleteHtml}
 
         <div class="note-compose">
             <label>
@@ -443,6 +492,29 @@ async function sendOccurrenceNote(id) {
 }
 
 async function handleOccurrenceAction(id, action) {
+    if (action === "delete-occurrence") {
+        if (!currentUser.admin) {
+            showToast("Apenas usuarios admin podem apagar ocorrencias.");
+            return;
+        }
+
+        if (!window.confirm("Apagar esta ocorrencia definitivamente?")) return;
+
+        const response = await fetch(`/api/ocorrencias/${id}`, {
+            method: "DELETE",
+            headers: {"Content-Type": "application/json"},
+        });
+
+        if (!response.ok) {
+            showToast("Nao foi possivel apagar a ocorrencia.");
+            return;
+        }
+
+        state.selectedOccurrenceId = null;
+        delete state.occurrenceDrafts[id];
+        return refreshAll();
+    }
+
     if (action === "timer") {
         const timerRange = qs("#timer-minutes");
         const minutos = Math.max(5, Math.min(30, Number(timerRange ? timerRange.value : 10)));
