@@ -3,10 +3,34 @@
 {% block title %}Ocorrências{% endblock %}
 
 {% block content %}
+<section class="occurrence-kpis" id="occurrence-kpis">
+    <article class="occurrence-kpi">
+        <span>Abertas</span>
+        <strong id="kpi-oc-abertas">0</strong>
+        <small>ocorrências</small>
+    </article>
+    <article class="occurrence-kpi alert">
+        <span>ALERTA</span>
+        <strong id="kpi-oc-alerta">0</strong>
+        <small>mais de 45 minutos abertas</small>
+    </article>
+    <article class="occurrence-kpi follow">
+        <span>Em acompanhamento</span>
+        <strong id="kpi-oc-acompanhamento">0</strong>
+        <small>aguardando ação</small>
+    </article>
+    <article class="occurrence-kpi contact">
+        <span>Sem contato</span>
+        <strong id="kpi-oc-sem-contato">0</strong>
+        <small>motoristas</small>
+    </article>
+</section>
+
 <section class="operation-toolbar">
     <div class="segmented">
         <button class="segment active" data-filter="todas">Todas</button>
         <button class="segment" data-filter="ABERTA">Abertas</button>
+        <button class="segment" data-filter="ALERTA">ALERTA</button>
         <button class="segment" data-filter="EM_ACOMPANHAMENTO">Acompanhamento</button>
         <button class="segment" data-filter="FINALIZADA">Finalizadas</button>
     </div>

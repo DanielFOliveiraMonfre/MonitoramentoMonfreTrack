@@ -24,27 +24,6 @@
             </div>
         </div>
 
-        <form class="handover-new" id="handover-occurrence-form">
-            <label>
-                Anexar nova ocorrência aberta
-                <select id="handover-new-type">
-                    <option value="FADIGA">Fadiga</option>
-                    <option value="OPERACIONAL">Operacional</option>
-                    <option value="CONTATO">Contato</option>
-                    <option value="OUTRA">Outra</option>
-                </select>
-            </label>
-            <label>
-                Quem está tratando
-                <input id="handover-new-owner" value="{{ usuario_atual.nome }}">
-            </label>
-            <label class="full">
-                Observação inicial
-                <textarea id="handover-new-message" rows="3" placeholder="Ex: motorista não atendeu, líder ciente, aguardar retorno..."></textarea>
-            </label>
-            <button class="primary-button" type="submit">Anexar ocorrência em aberto</button>
-        </form>
-
         <div class="handover-compose">
             <label>
                 Operador

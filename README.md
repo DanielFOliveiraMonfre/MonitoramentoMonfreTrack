@@ -18,6 +18,17 @@ Abra:
 http://127.0.0.1:5000
 ```
 
+## Persistência no Render
+
+Por padrão o painel usa `painel.db` dentro da pasta do projeto. Em serviços como Render, essa pasta pode ser recriada em deploy/restart e apagar os dados. Para manter histórico, configure um caminho persistente:
+
+```text
+PAINEL_DB_PATH=/var/data/painel.db
+MONFRETRACK_TZ=America/Sao_Paulo
+```
+
+Depois monte um Persistent Disk em `/var/data` ou use outro armazenamento persistente equivalente.
+
 Se quiser abrir em outro computador da mesma rede, use o IP do seu PC:
 
 ```text
@@ -109,4 +120,3 @@ POST /api/ocorrencias/1/timer
   "minutos": 10
 }
 ```
-

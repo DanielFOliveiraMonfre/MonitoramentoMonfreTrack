@@ -8,6 +8,7 @@ const state = {
     handoverDraft: "",
     handoverReference: "GERAL",
     notifiedTimers: new Set(),
+    detailClosed: false,
 };
 
 const currentUser = window.MONFRETRACK_USER || {nome: "daniel.oliveira", admin: false};
@@ -52,6 +53,39 @@ function escapeHtml(value) {
         .replaceAll(">", "&gt;")
         .replaceAll('"', "&quot;")
         .replaceAll("'", "&#039;");
+}
+
+function truncateText(value, max = 34) {
+    const text = String(value || "").trim();
+    if (text.length <= max) return text;
+    return `${text.slice(0, max).trim()}...`;
+}
+
+function parseLocalDate(value) {
+    if (!value) return null;
+    const normalized = String(value).replace(" ", "T");
+    const date = new Date(normalized);
+    return Number.isNaN(date.getTime()) ? null : date;
+}
+
+function formatDateTime(value) {
+    const date = parseLocalDate(value);
+    if (!date) return value || "-";
+    return date.toLocaleString("pt-BR");
+}
+
+function formatTimeOnly(value) {
+    const date = parseLocalDate(value);
+    if (!date) return "--:--";
+    return date.toLocaleTimeString("pt-BR", {hour: "2-digit", minute: "2-digit"});
+}
+
+function occurrenceVisual(oc) {
+    if (isFinalizedOccurrence(oc)) return {label: "FINALIZADA", cls: "finalizada"};
+    if (oc.alerta_atrasado) return {label: "ALERTA", cls: "alerta"};
+    if (String(oc.contato_status || "").toUpperCase() === "SEM_CONTATO") return {label: "SEM CONTATO", cls: "sem-contato"};
+    if (String(oc.status || "").toUpperCase() === "EM_ACOMPANHAMENTO") return {label: "ACOMPANHAMENTO", cls: "acompanhamento"};
+    return {label: "AGUARDANDO CONTATO", cls: "aguardando"};
 }
 
 function rolePill(op) {
@@ -206,20 +240,12 @@ function renderPredominance(data) {
 }
 
 function occurrenceBadge(oc) {
-    const cls = oc.status === "FINALIZADA" ? "online" :
-        oc.status === "EM_ACOMPANHAMENTO" ? "running" :
-        oc.status === "CANCELADA" ? "stopped" :
-        oc.status === "ABERTA" ? "stopped" : "offline";
-
-    return `<span class="status-pill ${cls}">${statusLabel(oc.status)}</span>`;
+    const visual = occurrenceVisual(oc);
+    return `<span class="occurrence-state ${visual.cls}">${visual.label}</span>`;
 }
 
 function occurrenceTitle(oc) {
-    if (isFadiga(oc)) {
-        return "OCORRÊNCIA DE FADIGA";
-    }
-
-    return `${statusLabel(oc.tipo || "OCORRENCIA")} #${oc.id}`;
+    return "OCORRÊNCIA DE FADIGA";
 }
 
 function occurrenceSubtitle(oc) {
@@ -233,6 +259,7 @@ function occurrenceSubtitle(oc) {
 function occurrenceCard(oc, compact = false) {
     const selected = state.selectedOccurrenceId === oc.id ? "selected" : "";
     const finalizada = isFinalizedOccurrence(oc);
+    const visual = occurrenceVisual(oc);
     const timer = oc.timer_restante || "-";
     const percent = oc.timer_percentual || 0;
     const note = Number(oc.observacoes_qtd || 0) > 0
@@ -241,43 +268,55 @@ function occurrenceCard(oc, compact = false) {
     const fatigueCount = isFadiga(oc) && Number(oc.alertas_qtd || 1) > 1
         ? `<span class="fatigue-count" title="Alertas de fadiga agrupados">x${oc.alertas_qtd}</span>`
         : "";
-    const fatigueInfo = isFadiga(oc)
-        ? `
-            <div class="fatigue-identity">
-                <div><span>Placa</span><strong>${escapeHtml(oc.placa || "-")}</strong></div>
-                <div><span>Motorista</span><strong>${escapeHtml(oc.motorista || "Motorista não informado")}</strong></div>
-            </div>
-        `
-        : "";
+    const noteText = truncateText(oc.ultima_observacao || oc.observacao || "Sem observações anexadas.", 38);
+    const cardAction = finalizada ? "Ver detalhes" : "Abrir detalhes";
+    const timerBlock = compact || finalizada ? "" : `
+        <div class="timer-track">
+            <div class="timer-fill" style="width:${percent}%"></div>
+        </div>
+    `;
+    const secondaryAction = finalizada
+        ? `<span class="done-inline">✓ Finalizada</span>`
+        : visual.cls === "aguardando"
+            ? `<button class="card-action secondary" data-card-action="details">Acompanhar</button>`
+            : `<button class="card-action secondary" data-card-action="finalizar">Finalizar</button>`;
 
     return `
-        <article class="occurrence-card ${selected}" data-occurrence-id="${oc.id}">
+        <article class="occurrence-card ${selected} ${visual.cls}" data-occurrence-id="${oc.id}">
             <div class="occurrence-top">
                 <div>
+                    ${occurrenceBadge(oc)}
                     <div class="plate">${occurrenceTitle(oc)}</div>
-                    <div class="motorista">${occurrenceSubtitle(oc)}</div>
                 </div>
                 <div class="occurrence-flags">
                     ${fatigueCount}
                     ${note}
-                    ${occurrenceBadge(oc)}
                 </div>
             </div>
-            ${fatigueInfo}
-            ${compact || finalizada ? "" : `
-                <div class="timer-track">
-                    <div class="timer-fill" style="width:${percent}%"></div>
+            <div class="card-identity">
+                <strong>${escapeHtml(oc.placa || "-")}</strong>
+                <span>${escapeHtml(oc.motorista || "Motorista não informado")}</span>
+            </div>
+            <div class="card-mid">
+                <div>
+                    <span>Operador</span>
+                    <strong>${escapeHtml(oc.operador || "-")}</strong>
                 </div>
-                <div class="timer-row">
-                    <span>${statusLabel(oc.etapa)}</span>
-                    <strong>${timer}</strong>
+                <div class="active-time ${visual.cls}">
+                    <strong>${oc.tempo_ocorrencia || oc.idade || "-"}</strong>
+                    <span>tempo ativo</span>
                 </div>
-            `}
+            </div>
+            <p class="last-note" title="${escapeHtml(oc.ultima_observacao || oc.observacao || "")}">${escapeHtml(noteText)}</p>
+            ${timerBlock}
+            <div class="card-actions">
+                <button class="card-action" data-card-action="details">${cardAction}</button>
+                ${secondaryAction}
+            </div>
             <div class="occurrence-meta">
-                <span>${oc.idade || "-"}</span>
-                <span>${oc.atualizado_em || "-"}</span>
+                <span>${formatTimeOnly(oc.horario_alerta || oc.criado_em)}</span>
+                <span>${formatDateTime(oc.atualizado_em)}</span>
             </div>
-            ${oc.ultima_observacao && !compact ? `<p class="last-note">${escapeHtml(oc.ultima_observacao)}</p>` : ""}
         </article>
     `;
 }
@@ -302,12 +341,37 @@ function renderDashboard(data) {
 
 function filteredOccurrences(ocorrencias) {
     if (state.filter === "todas") return ocorrencias;
+    if (state.filter === "ALERTA") return ocorrencias.filter((oc) => oc.alerta_atrasado && !isFinalizedOccurrence(oc));
     return ocorrencias.filter((oc) => oc.status === state.filter);
+}
+
+function renderOccurrenceKpis(data) {
+    const abertas = data.ocorrencias_abertas || [];
+    const all = data.ocorrencias_operacao || abertas;
+    const emAcompanhamento = abertas.filter((oc) => oc.status === "EM_ACOMPANHAMENTO").length;
+    const semContato = abertas.filter((oc) => String(oc.contato_status || "").toUpperCase() === "SEM_CONTATO").length;
+    const alerta = abertas.filter((oc) => oc.alerta_atrasado).length;
+
+    if (qs("#kpi-oc-abertas")) qs("#kpi-oc-abertas").textContent = abertas.length;
+    if (qs("#kpi-oc-alerta")) qs("#kpi-oc-alerta").textContent = alerta;
+    if (qs("#kpi-oc-acompanhamento")) qs("#kpi-oc-acompanhamento").textContent = emAcompanhamento;
+    if (qs("#kpi-oc-sem-contato")) qs("#kpi-oc-sem-contato").textContent = semContato;
+
+    document.querySelectorAll(".segment").forEach((button) => {
+        const filter = button.dataset.filter;
+        const count = filter === "todas" ? all.length :
+            filter === "ALERTA" ? alerta :
+            all.filter((oc) => oc.status === filter).length;
+        const label = button.textContent.replace(/\s+\d+$/, "").trim();
+        button.innerHTML = `${label} <span>${count}</span>`;
+    });
 }
 
 function renderOperation(data) {
     const lista = qs("#ocorrencias-operacao");
     if (!lista) return;
+
+    renderOccurrenceKpis(data);
 
     const base = data.ocorrencias_operacao || data.ocorrencias_abertas || [];
     const ocorrencias = filteredOccurrences(base.concat([]));
@@ -316,8 +380,15 @@ function renderOperation(data) {
         : `<div class="empty-block">Nenhuma ocorrência nesta visão.</div>`;
 
     lista.querySelectorAll(".occurrence-card").forEach((card) => {
-        card.addEventListener("click", () => {
+        card.addEventListener("click", (event) => {
+            if (event.target.dataset.cardAction === "finalizar") {
+                event.stopPropagation();
+                handleOccurrenceAction(Number(card.dataset.occurrenceId), "finalizar");
+                return;
+            }
+
             state.selectedOccurrenceId = Number(card.dataset.occurrenceId);
+            state.detailClosed = false;
             renderOperation(data);
             renderDetail(data);
         });
@@ -327,7 +398,7 @@ function renderOperation(data) {
         state.selectedOccurrenceId = null;
     }
 
-    if (!state.selectedOccurrenceId && ocorrencias.length) {
+    if (!state.selectedOccurrenceId && ocorrencias.length && !state.detailClosed) {
         state.selectedOccurrenceId = ocorrencias[0].id;
     }
 
@@ -353,13 +424,12 @@ function renderDetail(data) {
         return;
     }
 
-    const dadosFadiga = isFadiga(oc)
-        ? `
-            <div class="detail-row"><span>Placa</span><strong>${oc.placa || "-"}</strong></div>
-            <div class="detail-row"><span>Motorista</span><strong>${oc.motorista || "-"}</strong></div>
-            <div class="detail-row"><span>Alertas de fadiga</span><strong>${oc.alertas_qtd || 1}</strong></div>
-        `
-        : "";
+    const dadosFadiga = `
+        <div class="detail-row featured"><span>Placa</span><strong>${oc.placa || "-"}</strong></div>
+        <div class="detail-row featured"><span>Motorista</span><strong>${oc.motorista || "-"}</strong></div>
+        <div class="detail-row"><span>Alertas de fadiga</span><strong>${oc.alertas_qtd || 1}</strong></div>
+    `;
+    const visual = occurrenceVisual(oc);
     const notas = Array.isArray(oc.notas) ? oc.notas : [];
     const notasHtml = notas.length
         ? `
@@ -367,7 +437,7 @@ function renderDetail(data) {
                 <strong>Observações salvas</strong>
                 ${notas.map((nota) => `
                     <article>
-                        <span>${escapeHtml(nota.operador)} / ${escapeHtml(nota.criado_em)}</span>
+                        <span>${escapeHtml(nota.operador)} / ${escapeHtml(formatDateTime(nota.criado_em))}</span>
                         <p>${escapeHtml(nota.mensagem)}</p>
                     </article>
                 `).join("")}
@@ -375,6 +445,24 @@ function renderDetail(data) {
         `
         : "";
     const finalizada = isFinalizedOccurrence(oc);
+    const timeline = [
+        {time: oc.criado_em, text: "Primeiro alerta de fadiga", cls: "info"},
+        Number(oc.alertas_qtd || 1) > 1 ? {time: oc.ultimo_alerta_em || oc.atualizado_em, text: `${oc.alertas_qtd} alertas de fadiga agrupados`, cls: "info"} : null,
+        oc.contato_status && oc.contato_status !== "PENDENTE" ? {time: oc.atualizado_em, text: statusLabel(oc.contato_status), cls: "warn"} : null,
+        oc.parada_status && oc.parada_status !== "PENDENTE" ? {time: oc.atualizado_em, text: statusLabel(oc.parada_status), cls: "ok"} : null,
+        finalizada ? {time: oc.finalizado_em || oc.atualizado_em, text: "Ocorrência finalizada", cls: "ok"} : null,
+    ].filter(Boolean);
+    const timelineHtml = timeline.length ? `
+        <div class="timeline">
+            <strong>Linha do tempo</strong>
+            ${timeline.map((item) => `
+                <div class="timeline-item ${item.cls}">
+                    <span>${formatTimeOnly(item.time)}</span>
+                    <p>${escapeHtml(item.text)}</p>
+                </div>
+            `).join("")}
+        </div>
+    ` : "";
     const timerValue = Math.max(5, Math.min(30, Number(oc.timer_minutos || 10)));
     const timerDetail = finalizada ? "" : `
         <div class="detail-row"><span>Timer</span><strong>${oc.timer_restante || "-"}</strong></div>
@@ -419,7 +507,11 @@ function renderDetail(data) {
                 <div class="plate">${occurrenceTitle(oc)}</div>
                 <div class="motorista">${occurrenceSubtitle(oc)}</div>
             </div>
+            <button class="drawer-close" type="button" data-action="close-detail">×</button>
+        </div>
+        <div class="detail-state-line">
             ${occurrenceBadge(oc)}
+            <span>${oc.tempo_ocorrencia || oc.idade || "-"} de ocorrência</span>
         </div>
 
         <div class="detail-grid">
@@ -430,8 +522,11 @@ function renderDetail(data) {
             <div class="detail-row"><span>Parada</span><strong>${statusLabel(oc.parada_status)}</strong></div>
             ${timerDetail}
             <div class="detail-row"><span>Observações</span><strong>${oc.observacoes_qtd || 0}</strong></div>
-            <div class="detail-row"><span>Finalizado em</span><strong>${oc.finalizado_em || "-"}</strong></div>
+            <div class="detail-row"><span>Aberta em</span><strong>${formatDateTime(oc.criado_em)}</strong></div>
+            <div class="detail-row"><span>Finalizado em</span><strong>${formatDateTime(oc.finalizado_em) || "-"}</strong></div>
         </div>
+
+        ${timelineHtml}
 
         ${actionsHtml}
         ${adminDeleteHtml}
@@ -492,6 +587,13 @@ async function sendOccurrenceNote(id) {
 }
 
 async function handleOccurrenceAction(id, action) {
+    if (action === "close-detail") {
+        state.selectedOccurrenceId = null;
+        state.detailClosed = true;
+        if (state.lastData) renderOperation(state.lastData);
+        return;
+    }
+
     if (action === "delete-occurrence") {
         if (!currentUser.admin) {
             showToast("Apenas usuarios admin podem apagar ocorrencias.");
@@ -511,6 +613,7 @@ async function handleOccurrenceAction(id, action) {
         }
 
         state.selectedOccurrenceId = null;
+        state.detailClosed = true;
         delete state.occurrenceDrafts[id];
         return refreshAll();
     }
@@ -588,6 +691,23 @@ function setupNotificationControl() {
 
     topActions.insertBefore(button, topActions.firstChild);
     updateNotificationControl();
+}
+
+function setupSidebarToggle() {
+    const button = qs("#sidebar-toggle");
+    if (!button) return;
+
+    if (localStorage.getItem("monfretrack-sidebar") === "collapsed") {
+        document.body.classList.add("sidebar-collapsed");
+    }
+
+    button.addEventListener("click", () => {
+        document.body.classList.toggle("sidebar-collapsed");
+        localStorage.setItem(
+            "monfretrack-sidebar",
+            document.body.classList.contains("sidebar-collapsed") ? "collapsed" : "open"
+        );
+    });
 }
 
 function showToast(message) {
@@ -686,6 +806,8 @@ function renderTrocaTurno() {
 
     const chat = qs("#handover-chat");
     if (chat) {
+        const nearBottom = chat.scrollHeight - chat.scrollTop - chat.clientHeight < 80;
+        const firstLoad = chat.dataset.loaded !== "1";
         chat.innerHTML = data.notas.length
             ? data.notas.map((nota) => `
                 <article class="chat-note ${nota.operador === DEFAULT_OPERATOR ? "mine" : ""}">
@@ -697,7 +819,7 @@ function renderTrocaTurno() {
                         <button class="delete-note" data-delete-note="${nota.id}" title="Apagar mensagem">Apagar</button>
                     </div>
                     <p>${escapeHtml(nota.mensagem)}</p>
-                    <small>${escapeHtml(nota.criado_em)}</small>
+                    <small>${escapeHtml(formatDateTime(nota.criado_em))}</small>
                 </article>
             `).join("")
             : `<div class="empty-block">Nenhuma observação anexada.</div>`;
@@ -707,7 +829,10 @@ function renderTrocaTurno() {
                 deleteTurnoNote(button.dataset.deleteNote);
             });
         });
-        chat.scrollTop = chat.scrollHeight;
+        if (firstLoad || nearBottom) {
+            chat.scrollTop = chat.scrollHeight;
+        }
+        chat.dataset.loaded = "1";
     }
 }
 
@@ -790,6 +915,7 @@ async function createOccurrence(payload, noteText) {
     }
 
     state.selectedOccurrenceId = data.ocorrencia_id;
+    state.detailClosed = false;
     await refreshAll();
     return true;
 }
@@ -869,6 +995,7 @@ function bindButtons() {
         });
     }
     setupNotificationControl();
+    setupSidebarToggle();
     document.addEventListener("click", requestNotificationPermission, {once: true});
 
     document.querySelectorAll(".segment").forEach((button) => {

@@ -3,11 +3,22 @@
 import os
 import sqlite3
 import hashlib
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
+from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
-DB_PATH = os.path.join(BASE_DIR, "painel.db")
+DB_PATH = os.environ.get("PAINEL_DB_PATH") or os.path.join(BASE_DIR, "painel.db")
+
+
+def carregar_fuso_local():
+    try:
+        return ZoneInfo(os.environ.get("MONFRETRACK_TZ", "America/Sao_Paulo"))
+    except ZoneInfoNotFoundError:
+        return timezone(timedelta(hours=-3))
+
+
+FUSO_LOCAL = carregar_fuso_local()
 MONFRETRACK_DIR = (
     r"C:\Users\DANIEL.OLIVEIRA\OneDrive - MONFREDINI TRANSPORTES LTDA"
     r"\Área de Trabalho\Teste"
@@ -54,11 +65,15 @@ USUARIOS_FIXOS = {
 
 
 def agora_iso():
-    return datetime.now().replace(microsecond=0).isoformat(sep=" ")
+    return agora_dt().isoformat(sep=" ")
 
 
 def hoje_iso():
-    return datetime.now().date().isoformat()
+    return agora_dt().date().isoformat()
+
+
+def agora_dt():
+    return datetime.now(FUSO_LOCAL).replace(tzinfo=None, microsecond=0)
 
 
 def parse_dt(valor):
@@ -295,7 +310,7 @@ def upsert_operador(operador, maquina, status="ABERTO", versao=None):
         if existente:
             ultimo = parse_dt(existente["ultimo_heartbeat"])
             resetar_abertura = bool(
-                not ultimo or (datetime.now() - ultimo).total_seconds() > 45
+                not ultimo or (agora_dt() - ultimo).total_seconds() > 45
             )
             conn.execute(
                 """
@@ -341,7 +356,26 @@ def registrar_alerta_tratado(operador, maquina, tipo, placa=None, motorista=None
             """,
             (operador, maquina, tipo, placa, motorista, agora_iso()),
         )
-        return cur.lastrowid
+        registro_id = cur.lastrowid
+
+    if tipo == "FADIGA":
+        criar_ocorrencia(
+            {
+                "external_id": f"fadiga-alerta-{registro_id}",
+                "tipo": "FADIGA",
+                "placa": placa or "-",
+                "motorista": motorista or "Motorista nao identificado",
+                "operador": operador,
+                "maquina": maquina,
+                "horario_alerta": agora_iso(),
+                "status": "ABERTA",
+                "etapa": "AGUARDANDO_CONTATO",
+                "contato_status": "PENDENTE",
+                "parada_status": "PENDENTE",
+            }
+        )
+
+    return registro_id
 
 
 def criar_ocorrencia(payload):
@@ -359,17 +393,24 @@ def criar_ocorrencia(payload):
         if tipo == "FADIGA":
             existente = buscar_fadiga_aberta(conn, placa, motorista)
             if existente:
+                ultimo = parse_dt(existente["ultimo_alerta_em"])
+                duplicado_recente = bool(
+                    ultimo
+                    and (agora_dt() - ultimo).total_seconds() <= 5
+                    and (existente["operador"] or "").lower() == operador
+                )
+                if duplicado_recente:
+                    return existente["id"]
+
                 conn.execute(
                     """
                     UPDATE ocorrencias
                        SET alertas_qtd = COALESCE(alertas_qtd, 1) + 1,
                            ultimo_alerta_em = ?,
-                           operador = COALESCE(NULLIF(?, ''), operador),
-                           maquina = COALESCE(NULLIF(?, ''), maquina),
                            atualizado_em = ?
                      WHERE id = ?
                     """,
-                    (agora, operador, maquina, agora, existente["id"]),
+                    (agora, agora, existente["id"]),
                 )
                 return existente["id"]
 
@@ -436,14 +477,13 @@ def buscar_fadiga_aberta(conn, placa, motorista):
     if placa:
         condicoes.append("UPPER(COALESCE(placa, '')) = ?")
         params.append(placa)
-
-    if motorista:
+    elif motorista:
         condicoes.append("UPPER(COALESCE(motorista, '')) = ?")
         params.append(motorista)
 
     return conn.execute(
         f"""
-        SELECT id
+        SELECT *
           FROM ocorrencias
          WHERE {' AND '.join(condicoes)}
          ORDER BY atualizado_em DESC
@@ -510,7 +550,7 @@ def atualizar_ocorrencia(ocorrencia_id, payload):
 
 def iniciar_timer_ocorrencia(ocorrencia_id, minutos):
     minutos = max(5, min(30, int(minutos or 10)))
-    inicio = datetime.now().replace(microsecond=0)
+    inicio = agora_dt()
     fim = inicio + timedelta(minutes=minutos)
     atualizar_ocorrencia(
         ocorrencia_id,
@@ -606,7 +646,7 @@ def enriquecer_preventiva(row):
     timer_inicio = parse_dt(item["timer_inicio"])
     restante = None
     if timer_fim:
-        restante = int((timer_fim - datetime.now()).total_seconds())
+        restante = int((timer_fim - agora_dt()).total_seconds())
 
     item["timer_restante_segundos"] = restante
     item["timer_restante"] = formatar_timer(restante) if restante is not None else "-"
@@ -667,7 +707,7 @@ def atualizar_preventiva(preventiva_id, payload):
 
 def iniciar_timer_preventiva(preventiva_id, minutos):
     minutos = max(1, min(20, int(minutos or 20)))
-    inicio = datetime.now().replace(microsecond=0)
+    inicio = agora_dt()
     fim = inicio + timedelta(minutes=minutos)
 
     with get_conn() as conn:
@@ -776,7 +816,7 @@ def dados_troca_turno():
 
 
 def listar_operadores(timeout_online=35):
-    limite = datetime.now() - timedelta(seconds=timeout_online)
+    limite = agora_dt() - timedelta(seconds=timeout_online)
     usuarios = listar_usuarios_cadastrados()
 
     with get_conn() as conn:
@@ -794,9 +834,10 @@ def listar_operadores(timeout_online=35):
                 """
                 SELECT operador, COUNT(*) AS total
                   FROM alertas_tratados
-                 WHERE date(criado_em) = date('now', 'localtime')
+                 WHERE date(criado_em) = ?
                  GROUP BY operador
-                """
+                """,
+                (hoje_iso(),),
             ).fetchall()
         }
 
@@ -818,7 +859,7 @@ def listar_operadores(timeout_online=35):
         ultimo = parse_dt(row["ultimo_heartbeat"]) if row else None
         aberto = parse_dt(row["app_aberto_em"]) if row else None
         online = bool(ultimo and ultimo >= limite)
-        segundos_aberto = int((datetime.now() - aberto).total_seconds()) if aberto else 0
+        segundos_aberto = int((agora_dt() - aberto).total_seconds()) if aberto else 0
         status = row["status"] if row else "OFFLINE"
 
         operadores.append(
@@ -851,16 +892,17 @@ def enriquecer_ocorrencia(row):
     timer_estado = "SEM_TIMER"
 
     if timer_fim:
-        restante = int((timer_fim - datetime.now()).total_seconds())
+        restante = int((timer_fim - agora_dt()).total_seconds())
         timer_estado = "RODANDO" if restante > 0 else "VENCIDO"
 
     duracao_aberta = 0
     criado = parse_dt(row["criado_em"])
     if criado:
-        duracao_aberta = int((datetime.now() - criado).total_seconds())
+        duracao_aberta = int((agora_dt() - criado).total_seconds())
 
     item["alertas_qtd"] = int(item.get("alertas_qtd") or 1)
     item["notas"] = listar_notas_referencia("OCORRENCIA", item["id"], limite=12)
+    item["alerta_atrasado"] = bool(not finalizada and duracao_aberta >= 45 * 60)
     item["timer_estado"] = timer_estado
     item["timer_restante_segundos"] = restante
     item["timer_restante"] = formatar_timer(restante) if restante is not None else "-"
@@ -869,17 +911,21 @@ def enriquecer_ocorrencia(row):
         item["timer_minutos"] = None
         item["timer_inicio"] = None
         item["timer_fim"] = None
+    item["ocorrencia_segundos"] = max(0, duracao_aberta)
+    item["tempo_ocorrencia"] = formatar_duracao(duracao_aberta)
     item["idade"] = formatar_duracao(duracao_aberta)
     return item
 
 
 def listar_ocorrencias(apenas_abertas=False, apenas_finalizadas=False, limite=80):
-    where = ""
+    filtros = ["UPPER(COALESCE(o.tipo, '')) = 'FADIGA'"]
     params = []
     if apenas_abertas:
-        where = "WHERE o.status NOT IN ('FINALIZADA', 'CANCELADA')"
+        filtros.append("o.status NOT IN ('FINALIZADA', 'CANCELADA')")
     elif apenas_finalizadas:
-        where = "WHERE o.status IN ('FINALIZADA', 'CANCELADA')"
+        filtros.append("o.status IN ('FINALIZADA', 'CANCELADA')")
+
+    where = f"WHERE {' AND '.join(filtros)}"
 
     with get_conn() as conn:
         rows = conn.execute(
@@ -996,9 +1042,10 @@ def contar_alertas_por_turno_hoje():
             """
             SELECT operador, tipo, COUNT(*) AS total
               FROM alertas_tratados
-             WHERE date(criado_em) = date('now', 'localtime')
+             WHERE date(criado_em) = ?
              GROUP BY operador, tipo
-            """
+            """,
+            (hoje_iso(),),
         ).fetchall()
 
     for row in rows:
@@ -1025,8 +1072,9 @@ def resumo_dashboard():
             """
             SELECT COUNT(*) AS total
               FROM alertas_tratados
-             WHERE date(criado_em) = date('now', 'localtime')
-            """
+             WHERE date(criado_em) = ?
+            """,
+            (hoje_iso(),),
         ).fetchone()["total"]
 
         fadigas_hoje = conn.execute(
@@ -1034,12 +1082,14 @@ def resumo_dashboard():
             SELECT COUNT(*) AS total
               FROM ocorrencias
              WHERE tipo = 'FADIGA'
-               AND date(criado_em) = date('now', 'localtime')
-            """
+               AND date(criado_em) = ?
+            """,
+            (hoje_iso(),),
         ).fetchone()["total"]
 
     online = [op for op in operadores if op["online"]]
     offline = [op for op in operadores if not op["online"]]
+    ocorrencias_alerta = [oc for oc in ocorrencias_abertas if oc.get("alerta_atrasado")]
     alertas_por_turno = contar_alertas_por_turno_hoje()
     turnos = montar_resumo_turnos(operadores, ocorrencias_abertas, alertas_por_turno)
 
@@ -1054,6 +1104,7 @@ def resumo_dashboard():
         "operadores_cadastrados": len(operadores),
         "alertas_tratados_hoje": total_tratados_hoje,
         "fadigas_hoje": fadigas_hoje,
+        "ocorrencias_alerta": ocorrencias_alerta,
         "ocorrencias_abertas": ocorrencias_abertas,
         "ocorrencias_finalizadas": ocorrencias_finalizadas,
         "ocorrencias_operacao": ocorrencias_abertas + ocorrencias_finalizadas,
@@ -1094,7 +1145,7 @@ def calcular_percentual_timer(inicio, fim):
     if total <= 0:
         return 100
 
-    passado = (datetime.now() - inicio_dt).total_seconds()
+    passado = (agora_dt() - inicio_dt).total_seconds()
     return max(0, min(100, int((passado / total) * 100)))
 
 

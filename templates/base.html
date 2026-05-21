@@ -8,6 +8,9 @@
 </head>
 <body data-page="{{ pagina }}" data-user="{{ usuario_atual.nome if usuario_atual else '' }}" data-admin="{{ 1 if usuario_atual and usuario_atual.admin else 0 }}">
     <aside class="sidebar">
+        <button class="sidebar-toggle" id="sidebar-toggle" type="button" title="Reduzir menu">
+            <span>‹</span>
+        </button>
         <div class="brand">
             <img class="brand-logo" src="{{ url_for('logo') }}" alt="MonfreTrack">
             <div>
