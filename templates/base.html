@@ -20,21 +20,14 @@
         </div>
 
         <nav class="nav">
-            {% if usuario_atual and usuario_atual.admin %}
             <a href="/dashboard" class="{% if pagina == 'dashboard' %}active{% endif %}">
                 <span class="nav-icon">▦</span>
                 Supervisão
             </a>
             <a href="/operacao" class="{% if pagina == 'operacao' %}active{% endif %}">
-                <span class="nav-icon">◉</span>
+                <span class="nav-icon">◎</span>
                 Ocorrências
             </a>
-            {% else %}
-            <a href="/minha-operacao" class="{% if pagina == 'minha_operacao' %}active{% endif %}">
-                <span class="nav-icon">✎</span>
-                Minha operação
-            </a>
-            {% endif %}
             <a href="/troca-turno" class="{% if pagina == 'troca_turno' %}active{% endif %}">
                 <span class="nav-icon">↗</span>
                 Troca de turno

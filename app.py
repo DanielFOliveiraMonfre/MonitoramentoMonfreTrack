@@ -75,7 +75,7 @@ def login():
             destino = request.args.get("next")
             if destino and destino.startswith("/"):
                 return redirect(destino)
-            return redirect(url_for("dashboard" if usuario["admin"] else "minha_operacao"))
+            return redirect(url_for("dashboard"))
 
         erro = "Usuario ou senha invalidos."
 
@@ -91,20 +91,17 @@ def logout():
 @app.route("/")
 @login_required
 def home():
-    usuario = usuario_logado()
-    if usuario.get("admin"):
-        return redirect(url_for("dashboard"))
-    return redirect(url_for("minha_operacao"))
+    return redirect(url_for("dashboard"))
 
 
 @app.route("/dashboard")
-@admin_required
+@login_required
 def dashboard():
     return render_template("dashboard.html", pagina="dashboard")
 
 
 @app.route("/operacao")
-@admin_required
+@login_required
 def operacao():
     return render_template("operacao.html", pagina="operacao")
 
@@ -112,7 +109,7 @@ def operacao():
 @app.route("/minha-operacao")
 @login_required
 def minha_operacao():
-    return render_template("usuario.html", pagina="minha_operacao")
+    return redirect(url_for("dashboard"))
 
 
 @app.route("/troca-turno")

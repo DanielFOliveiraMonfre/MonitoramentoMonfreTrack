@@ -9,6 +9,7 @@ const state = {
     handoverReference: "GERAL",
     notifiedTimers: new Set(),
     detailClosed: false,
+    occurrenceScale: "normal",
 };
 
 const currentUser = window.MONFRETRACK_USER || {nome: "daniel.oliveira", admin: false};
@@ -710,6 +711,35 @@ function setupSidebarToggle() {
     });
 }
 
+function applyOccurrenceScale(scale) {
+    const allowed = ["normal", "compacta", "tv", "maxima"];
+    const selected = allowed.includes(scale) ? scale : "normal";
+    state.occurrenceScale = selected;
+
+    document.body.classList.remove(
+        "occ-scale-normal",
+        "occ-scale-compacta",
+        "occ-scale-tv",
+        "occ-scale-maxima"
+    );
+    document.body.classList.add(`occ-scale-${selected}`);
+    localStorage.setItem("monfretrack-occurrence-scale", selected);
+
+    document.querySelectorAll("[data-scale]").forEach((button) => {
+        button.classList.toggle("active", button.dataset.scale === selected);
+    });
+}
+
+function setupOccurrenceScale() {
+    const control = qs("#occurrence-scale-control");
+    if (!control) return;
+
+    applyOccurrenceScale(localStorage.getItem("monfretrack-occurrence-scale") || "normal");
+    control.querySelectorAll("[data-scale]").forEach((button) => {
+        button.addEventListener("click", () => applyOccurrenceScale(button.dataset.scale));
+    });
+}
+
 function showToast(message) {
     let container = qs("#toast-container");
     if (!container) {
@@ -996,6 +1026,7 @@ function bindButtons() {
     }
     setupNotificationControl();
     setupSidebarToggle();
+    setupOccurrenceScale();
     document.addEventListener("click", requestNotificationPermission, {once: true});
 
     document.querySelectorAll(".segment").forEach((button) => {

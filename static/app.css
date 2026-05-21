@@ -764,7 +764,7 @@ td small {
 
 .plate {
     color: var(--ink);
-    font-size: 18px;
+    font-size: var(--occ-title-size, 18px);
 }
 
 .motorista {
@@ -780,7 +780,7 @@ td small {
 }
 
 .card-identity strong {
-    font-size: 20px;
+    font-size: var(--occ-plate-size, 20px);
     letter-spacing: 0;
 }
 
@@ -817,7 +817,7 @@ td small {
 
 .active-time strong {
     color: var(--brand);
-    font-size: 18px;
+    font-size: var(--occ-active-size, 18px);
 }
 
 .active-time.alerta strong {
@@ -856,6 +856,86 @@ td small {
     justify-content: center;
     color: var(--ok);
     font-weight: 800;
+}
+
+body.occ-scale-normal {
+    --occ-card-min: 260px;
+    --occ-card-height: 268px;
+    --occ-card-pad: 14px;
+    --occ-title-size: 18px;
+    --occ-plate-size: 20px;
+    --occ-active-size: 18px;
+    --occ-note-size: 13px;
+}
+
+body.occ-scale-compacta {
+    --occ-card-min: 232px;
+    --occ-card-height: 238px;
+    --occ-card-pad: 12px;
+    --occ-title-size: 16px;
+    --occ-plate-size: 18px;
+    --occ-active-size: 16px;
+    --occ-note-size: 12px;
+}
+
+body.occ-scale-tv {
+    --occ-card-min: 210px;
+    --occ-card-height: 218px;
+    --occ-card-pad: 11px;
+    --occ-title-size: 15px;
+    --occ-plate-size: 17px;
+    --occ-active-size: 15px;
+    --occ-note-size: 12px;
+}
+
+body.occ-scale-maxima {
+    --occ-card-min: 190px;
+    --occ-card-height: 202px;
+    --occ-card-pad: 10px;
+    --occ-title-size: 14px;
+    --occ-plate-size: 16px;
+    --occ-active-size: 14px;
+    --occ-note-size: 11px;
+}
+
+body.occ-scale-compacta .operation-list-panel .occurrence-list,
+body.occ-scale-tv .operation-list-panel .occurrence-list,
+body.occ-scale-maxima .operation-list-panel .occurrence-list {
+    max-height: calc(100vh - 282px);
+}
+
+body.occ-scale-tv .operation-list-panel .occurrence-card,
+body.occ-scale-maxima .operation-list-panel .occurrence-card {
+    grid-template-rows: auto auto auto 1fr auto;
+}
+
+body.occ-scale-tv .card-identity,
+body.occ-scale-maxima .card-identity {
+    margin: 6px 0 8px;
+}
+
+body.occ-scale-tv .card-actions,
+body.occ-scale-maxima .card-actions {
+    gap: 6px;
+    margin-top: 6px;
+}
+
+body.occ-scale-tv .card-action,
+body.occ-scale-maxima .card-action {
+    min-height: 30px;
+    font-size: 12px;
+}
+
+body.occ-scale-maxima .occurrence-state,
+body.occ-scale-maxima .note-pill,
+body.occ-scale-maxima .fatigue-count {
+    min-height: 22px;
+    padding-inline: 7px;
+    font-size: 11px;
+}
+
+body.occ-scale-maxima .occurrence-meta {
+    display: none;
 }
 
 .fatigue-identity {
@@ -987,7 +1067,7 @@ td small {
 }
 
 .operation-list-panel .occurrence-list {
-    grid-template-columns: repeat(auto-fill, minmax(260px, 1fr));
+    grid-template-columns: repeat(auto-fill, minmax(var(--occ-card-min, 260px), 1fr));
     align-content: start;
     max-height: calc(100vh - 300px);
 }
@@ -1013,10 +1093,11 @@ td small {
 }
 
 .operation-list-panel .occurrence-card {
-    height: 268px;
+    height: var(--occ-card-height, 268px);
     display: grid;
     grid-template-rows: auto auto auto 1fr auto auto;
     overflow: hidden;
+    padding: var(--occ-card-pad, 14px);
 }
 
 .occurrence-card.alerta {
@@ -1087,7 +1168,7 @@ td small {
 .last-note {
     margin-top: 10px;
     color: #dbe2e8;
-    font-size: 13px;
+    font-size: var(--occ-note-size, 13px);
     overflow: hidden;
     text-overflow: ellipsis;
     white-space: nowrap;
@@ -1140,6 +1221,40 @@ td small {
     justify-content: space-between;
     gap: 14px;
     margin-bottom: 14px;
+}
+
+.scale-control {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    padding: 6px;
+    background: var(--surface);
+    border: 1px solid var(--line);
+    border-radius: 8px;
+}
+
+.scale-control > span {
+    padding: 0 6px;
+    color: var(--muted);
+    font-size: 12px;
+    font-weight: 800;
+}
+
+.scale-button {
+    min-height: 34px;
+    padding: 0 10px;
+    color: var(--muted);
+    background: #101214;
+    border: 1px solid var(--line);
+    border-radius: 6px;
+    font-weight: 800;
+}
+
+.scale-button.active,
+.scale-button:hover {
+    color: #fff;
+    border-color: rgba(42, 183, 255, 0.48);
+    background: rgba(42, 183, 255, 0.14);
 }
 
 .segmented {
