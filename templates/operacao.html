@@ -34,12 +34,21 @@
         <button class="segment" data-filter="EM_ACOMPANHAMENTO">Acompanhamento</button>
         <button class="segment" data-filter="FINALIZADA">Finalizadas</button>
     </div>
-    <div class="scale-control" id="occurrence-scale-control" aria-label="Escala das ocorrências">
-        <span>Escala</span>
-        <button class="scale-button" type="button" data-scale="normal">Atual</button>
-        <button class="scale-button" type="button" data-scale="compacta">Compacta</button>
-        <button class="scale-button" type="button" data-scale="tv">TV</button>
-        <button class="scale-button" type="button" data-scale="maxima">Máxima</button>
+    <div class="toolbar-controls">
+        <div class="scale-control" id="history-window-control" aria-label="Janela de histórico">
+            <span>Histórico</span>
+            <button class="scale-button" type="button" data-history-hours="24">24h</button>
+            <button class="scale-button" type="button" data-history-hours="12">12h</button>
+            <button class="scale-button" type="button" data-history-hours="9">9h</button>
+            <button class="scale-button" type="button" data-history-hours="5">5h</button>
+        </div>
+        <div class="scale-control" id="occurrence-scale-control" aria-label="Escala das ocorrências">
+            <span>Escala</span>
+            <button class="scale-button" type="button" data-scale="normal">Atual</button>
+            <button class="scale-button" type="button" data-scale="compacta">Compacta</button>
+            <button class="scale-button" type="button" data-scale="tv">TV</button>
+            <button class="scale-button" type="button" data-scale="maxima">Máxima</button>
+        </div>
     </div>
 </section>
 
@@ -48,7 +57,7 @@
         <div class="panel-head">
             <div>
                 <h2>Fila operacional</h2>
-                <p>Eventos enviados pelo MonfreTrack dos operadores.</p>
+                <p>Eventos recebidos do Forms e Power Automate.</p>
             </div>
         </div>
 
@@ -56,19 +65,18 @@
             <div class="empty-block">Nenhuma ocorrência registrada.</div>
         </div>
     </div>
-
-    <div class="panel detail-panel">
-        <div class="panel-head">
-            <div>
-                <h2>Tratativa</h2>
-                <p>Atualize status e anexe observações da ocorrência.</p>
-            </div>
-        </div>
-
-        <div id="detail-box" class="detail-box empty-detail">
-            <strong>Nenhuma ocorrência selecionada</strong>
-            <span>A fila será atualizada automaticamente.</span>
-        </div>
-    </div>
 </section>
+
+<div class="occurrence-modal-backdrop" id="occurrence-modal" hidden>
+    <section class="occurrence-modal-card" role="dialog" aria-modal="true" aria-labelledby="occurrence-modal-title">
+        <div class="occurrence-modal-head">
+            <div>
+                <span>Tratativa e histórico</span>
+                <h2 id="occurrence-modal-title">Informações de Ocorrência</h2>
+            </div>
+            <button class="drawer-close" type="button" data-action="close-detail" aria-label="Fechar">×</button>
+        </div>
+        <div id="detail-box" class="detail-box"></div>
+    </section>
+</div>
 {% endblock %}

@@ -3,12 +3,25 @@
 import os
 import sqlite3
 import hashlib
+import json
 from datetime import datetime, timedelta, timezone
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+DATABASE_URL = os.environ.get("DATABASE_URL")
 DB_PATH = os.environ.get("PAINEL_DB_PATH") or os.path.join(BASE_DIR, "painel.db")
+USING_POSTGRES = bool(DATABASE_URL)
+
+if USING_POSTGRES:
+    try:
+        import psycopg
+        from psycopg.rows import dict_row
+    except Exception as exc:
+        raise RuntimeError(
+            "DATABASE_URL foi configurado, mas o pacote psycopg nao esta instalado. "
+            "Instale psycopg[binary] no requirements.txt."
+        ) from exc
 
 
 def carregar_fuso_local():
@@ -93,10 +106,65 @@ def turno_operador(nome, admin=False):
     return "ADM" if admin else "T3"
 
 
+def adaptar_sql_postgres(sql):
+    sql = sql.replace("INTEGER PRIMARY KEY AUTOINCREMENT", "SERIAL PRIMARY KEY")
+    sql = sql.replace("?", "%s")
+    return sql
+
+
+def dividir_script_sql(script):
+    return [parte.strip() for parte in script.split(";") if parte.strip()]
+
+
+class PostgresConn:
+    def __init__(self):
+        self.conn = psycopg.connect(DATABASE_URL, row_factory=dict_row)
+
+    def execute(self, sql, params=None):
+        return self.conn.execute(adaptar_sql_postgres(sql), params or [])
+
+    def executescript(self, script):
+        for statement in dividir_script_sql(script):
+            self.execute(statement)
+
+    def commit(self):
+        self.conn.commit()
+
+    def rollback(self):
+        self.conn.rollback()
+
+    def close(self):
+        self.conn.close()
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, exc_type, exc, tb):
+        if exc_type:
+            self.rollback()
+        else:
+            self.commit()
+        self.close()
+
+
 def get_conn():
+    if USING_POSTGRES:
+        return PostgresConn()
+
     conn = sqlite3.connect(DB_PATH, check_same_thread=False)
     conn.row_factory = sqlite3.Row
     return conn
+
+
+def inserir_retorna_id(conn, sql, params):
+    if USING_POSTGRES:
+        sql = sql.strip().rstrip(";")
+        cur = conn.execute(f"{sql} RETURNING id", params)
+        row = cur.fetchone()
+        return row["id"]
+
+    cur = conn.execute(sql, params)
+    return cur.lastrowid
 
 
 def hash_senha(senha):
@@ -226,8 +294,12 @@ def init_db():
                 placa TEXT,
                 motorista TEXT,
                 operador TEXT,
+                operador_nome TEXT,
+                operador_email TEXT,
                 maquina TEXT,
+                data_hora TEXT,
                 horario_alerta TEXT,
+                origem TEXT NOT NULL DEFAULT 'MONFRETRACK',
                 status TEXT NOT NULL DEFAULT 'ABERTA',
                 etapa TEXT NOT NULL DEFAULT 'AGUARDANDO_CONTATO',
                 contato_status TEXT NOT NULL DEFAULT 'PENDENTE',
@@ -236,6 +308,9 @@ def init_db():
                 timer_inicio TEXT,
                 timer_fim TEXT,
                 observacao TEXT,
+                observacao_inicial TEXT,
+                campos_adicionais TEXT,
+                ordem_manual INTEGER,
                 alertas_qtd INTEGER NOT NULL DEFAULT 1,
                 ultimo_alerta_em TEXT,
                 criado_em TEXT NOT NULL,
@@ -277,19 +352,50 @@ def init_db():
                 apagada_em TEXT,
                 criado_em TEXT NOT NULL
             );
+
+            CREATE TABLE IF NOT EXISTS timeline_ocorrencias (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                ocorrencia_id INTEGER NOT NULL,
+                tipo TEXT NOT NULL,
+                mensagem TEXT NOT NULL,
+                operador TEXT,
+                origem TEXT,
+                criado_em TEXT NOT NULL
+            );
             """
         )
         garantir_coluna(conn, "ocorrencias", "alertas_qtd", "INTEGER NOT NULL DEFAULT 1")
         garantir_coluna(conn, "ocorrencias", "ultimo_alerta_em", "TEXT")
+        garantir_coluna(conn, "ocorrencias", "operador_nome", "TEXT")
+        garantir_coluna(conn, "ocorrencias", "operador_email", "TEXT")
+        garantir_coluna(conn, "ocorrencias", "data_hora", "TEXT")
+        garantir_coluna(conn, "ocorrencias", "origem", "TEXT NOT NULL DEFAULT 'MONFRETRACK'")
+        garantir_coluna(conn, "ocorrencias", "observacao_inicial", "TEXT")
+        garantir_coluna(conn, "ocorrencias", "campos_adicionais", "TEXT")
+        garantir_coluna(conn, "ocorrencias", "ordem_manual", "INTEGER")
         garantir_coluna(conn, "notas_turno", "apagada", "INTEGER NOT NULL DEFAULT 0")
         garantir_coluna(conn, "notas_turno", "apagada_em", "TEXT")
 
 
 def garantir_coluna(conn, tabela, coluna, definicao):
-    existentes = {
-        row["name"]
-        for row in conn.execute(f"PRAGMA table_info({tabela})").fetchall()
-    }
+    if USING_POSTGRES:
+        existentes = {
+            row["column_name"]
+            for row in conn.execute(
+                """
+                SELECT column_name
+                  FROM information_schema.columns
+                 WHERE table_schema = 'public'
+                   AND table_name = ?
+                """,
+                (tabela,),
+            ).fetchall()
+        }
+    else:
+        existentes = {
+            row["name"]
+            for row in conn.execute(f"PRAGMA table_info({tabela})").fetchall()
+        }
 
     if coluna not in existentes:
         conn.execute(f"ALTER TABLE {tabela} ADD COLUMN {coluna} {definicao}")
@@ -316,7 +422,7 @@ def upsert_operador(operador, maquina, status="ABERTO", versao=None):
                 """
                 UPDATE operadores
                    SET status = ?,
-                       app_aberto_em = CASE WHEN ? THEN ? ELSE app_aberto_em END,
+                       app_aberto_em = CASE WHEN ? = 1 THEN ? ELSE app_aberto_em END,
                        ultimo_heartbeat = ?,
                        versao = COALESCE(?, versao)
                  WHERE id = ?
@@ -325,7 +431,8 @@ def upsert_operador(operador, maquina, status="ABERTO", versao=None):
             )
             return existente["id"]
 
-        cur = conn.execute(
+        return inserir_retorna_id(
+            conn,
             """
             INSERT INTO operadores
                 (operador, maquina, status, app_aberto_em, ultimo_heartbeat, versao)
@@ -333,7 +440,6 @@ def upsert_operador(operador, maquina, status="ABERTO", versao=None):
             """,
             (operador, maquina, status, agora, agora, versao),
         )
-        return cur.lastrowid
 
 
 def registrar_alerta_tratado(operador, maquina, tipo, placa=None, motorista=None):
@@ -348,7 +454,8 @@ def registrar_alerta_tratado(operador, maquina, tipo, placa=None, motorista=None
     upsert_operador(operador, maquina, status="RODANDO")
 
     with get_conn() as conn:
-        cur = conn.execute(
+        registro_id = inserir_retorna_id(
+            conn,
             """
             INSERT INTO alertas_tratados
                 (operador, maquina, tipo, placa, motorista, criado_em)
@@ -356,7 +463,6 @@ def registrar_alerta_tratado(operador, maquina, tipo, placa=None, motorista=None
             """,
             (operador, maquina, tipo, placa, motorista, agora_iso()),
         )
-        registro_id = cur.lastrowid
 
     if tipo == "FADIGA":
         criar_ocorrencia(
@@ -381,11 +487,31 @@ def registrar_alerta_tratado(operador, maquina, tipo, placa=None, motorista=None
 def criar_ocorrencia(payload):
     agora = agora_iso()
     operador = (payload.get("operador") or "sem.operador").strip().lower()
+    operador_nome = (payload.get("operador_nome") or operador or "sem.operador").strip()
+    operador_email = (payload.get("operador_email") or "N/A").strip()
     maquina = (payload.get("maquina") or "sem.maquina").strip().upper()
     external_id = payload.get("external_id")
-    tipo = (payload.get("tipo") or "FADIGA").strip().upper()
+    tipo = (payload.get("tipo") or payload.get("evento") or "FADIGA").strip().upper()
     placa = normalizar_chave(payload.get("placa"))
     motorista = normalizar_chave(payload.get("motorista"))
+    data_hora = payload.get("data_hora") or payload.get("horario_alerta") or agora
+    origem = (payload.get("origem") or "MONFRETRACK").strip().upper()
+    campos_adicionais = payload.get("campos_adicionais") or {}
+    if isinstance(campos_adicionais, str):
+        campos_json = campos_adicionais
+    else:
+        campos_json = json.dumps(campos_adicionais, ensure_ascii=False)
+    observacao_inicial = payload.get("observacao_inicial")
+    if observacao_inicial is None:
+        observacao_inicial = payload.get("observacao")
+    timer_minutos = payload.get("timer_minutos")
+    timer_inicio = payload.get("timer_inicio")
+    timer_fim = payload.get("timer_fim")
+    if not timer_inicio and str(payload.get("status") or "ABERTA").strip().upper() not in {"FINALIZADA", "CANCELADA"}:
+        abertura = parse_dt(data_hora) or agora_dt()
+        timer_minutos = int(timer_minutos or 45)
+        timer_inicio = abertura.isoformat(sep=" ")
+        timer_fim = (abertura + timedelta(minutes=timer_minutos)).isoformat(sep=" ")
 
     upsert_operador(operador, maquina, status=payload.get("status_operador") or "RODANDO")
 
@@ -412,6 +538,15 @@ def criar_ocorrencia(payload):
                     """,
                     (agora, agora, existente["id"]),
                 )
+                adicionar_timeline_conn(
+                    conn,
+                    existente["id"],
+                    "NOVO_ALERTA",
+                    f"Novo alerta de fadiga agrupado por {operador}",
+                    operador,
+                    origem,
+                    agora,
+                )
                 return existente["id"]
 
         if external_id:
@@ -423,15 +558,18 @@ def criar_ocorrencia(payload):
                 atualizar_ocorrencia(existente["id"], payload)
                 return existente["id"]
 
-        cur = conn.execute(
+        ocorrencia_id = inserir_retorna_id(
+            conn,
             """
             INSERT INTO ocorrencias (
-                external_id, tipo, placa, motorista, operador, maquina,
-                horario_alerta, status, etapa, contato_status, parada_status,
+                external_id, tipo, placa, motorista, operador, operador_nome,
+                operador_email, maquina, data_hora, horario_alerta, origem,
+                status, etapa, contato_status, parada_status,
                 timer_minutos, timer_inicio, timer_fim, observacao,
-                alertas_qtd, ultimo_alerta_em, criado_em, atualizado_em
+                observacao_inicial, campos_adicionais, ordem_manual, alertas_qtd,
+                ultimo_alerta_em, criado_em, atualizado_em
             )
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
                 external_id,
@@ -439,23 +577,49 @@ def criar_ocorrencia(payload):
                 payload.get("placa") or "-",
                 payload.get("motorista") or "Motorista nao identificado",
                 operador,
+                operador_nome,
+                operador_email,
                 maquina,
-                payload.get("horario_alerta") or agora,
+                data_hora,
+                payload.get("horario_alerta") or data_hora,
+                origem,
                 (payload.get("status") or "ABERTA").strip().upper(),
                 (payload.get("etapa") or "AGUARDANDO_CONTATO").strip().upper(),
                 (payload.get("contato_status") or "PENDENTE").strip().upper(),
                 (payload.get("parada_status") or "PENDENTE").strip().upper(),
-                payload.get("timer_minutos"),
-                payload.get("timer_inicio"),
-                payload.get("timer_fim"),
+                timer_minutos,
+                timer_inicio,
+                timer_fim,
                 payload.get("observacao"),
+                observacao_inicial,
+                campos_json,
+                payload.get("ordem_manual"),
                 int(payload.get("alertas_qtd") or 1),
                 agora,
                 agora,
                 agora,
             ),
         )
-        return cur.lastrowid
+        adicionar_timeline_conn(
+            conn,
+            ocorrencia_id,
+            "CRIACAO",
+            f"Ocorrencia registrada por {operador_nome}",
+            operador,
+            origem,
+            data_hora,
+        )
+        if observacao_inicial and str(observacao_inicial).strip() and str(observacao_inicial).strip().upper() != "N/A":
+            adicionar_timeline_conn(
+                conn,
+                ocorrencia_id,
+                "OBSERVACAO_INICIAL",
+                f"Observacao inicial: {observacao_inicial}",
+                operador,
+                origem,
+                data_hora,
+            )
+        return ocorrencia_id
 
 
 def normalizar_chave(valor):
@@ -493,6 +657,82 @@ def buscar_fadiga_aberta(conn, placa, motorista):
     ).fetchone()
 
 
+def adicionar_timeline_conn(conn, ocorrencia_id, tipo, mensagem, operador=None, origem=None, criado_em=None):
+    if not mensagem:
+        return None
+
+    return inserir_retorna_id(
+        conn,
+        """
+        INSERT INTO timeline_ocorrencias
+            (ocorrencia_id, tipo, mensagem, operador, origem, criado_em)
+        VALUES (?, ?, ?, ?, ?, ?)
+        """,
+        (
+            ocorrencia_id,
+            (tipo or "INFO").strip().upper(),
+            str(mensagem).strip(),
+            operador,
+            origem or "SISTEMA",
+            criado_em or agora_iso(),
+        ),
+    )
+
+
+def adicionar_timeline(ocorrencia_id, tipo, mensagem, operador=None, origem=None):
+    with get_conn() as conn:
+        return adicionar_timeline_conn(conn, ocorrencia_id, tipo, mensagem, operador, origem)
+
+
+def listar_timeline_ocorrencia(ocorrencia_id, limite=80):
+    with get_conn() as conn:
+        rows = conn.execute(
+            """
+            SELECT *
+              FROM timeline_ocorrencias
+             WHERE ocorrencia_id = ?
+             ORDER BY criado_em ASC, id ASC
+             LIMIT ?
+            """,
+            (ocorrencia_id, limite),
+        ).fetchall()
+
+    return [dict(row) for row in rows]
+
+
+def criar_ocorrencia_forms(payload):
+    data_hora = payload.get("data_hora") or agora_iso()
+    minutos = int(payload.get("timer_minutos") or 45)
+    abertura = parse_dt(data_hora) or agora_dt()
+    fim = abertura + timedelta(minutes=minutos)
+    operador = (payload.get("operador") or "sem.operador").strip().lower()
+    tipo = (payload.get("evento") or payload.get("tipo") or "OCORRENCIA").strip().upper()
+    if tipo in {"", "N/A"}:
+        tipo = "OCORRENCIA"
+
+    dados = dict(payload)
+    dados.update(
+        {
+            "tipo": tipo,
+            "evento": tipo,
+            "operador": operador,
+            "maquina": payload.get("maquina") or "FORMS",
+            "origem": "FORMS",
+            "horario_alerta": data_hora,
+            "data_hora": data_hora,
+            "status": payload.get("status") or "ABERTA",
+            "etapa": payload.get("etapa") or "AGUARDANDO_CONTATO",
+            "contato_status": payload.get("contato_status") or "PENDENTE",
+            "parada_status": payload.get("parada_status") or "PENDENTE",
+            "timer_minutos": minutos,
+            "timer_inicio": abertura.isoformat(sep=" "),
+            "timer_fim": fim.isoformat(sep=" "),
+            "observacao": payload.get("observacao_inicial"),
+        }
+    )
+    return criar_ocorrencia(dados)
+
+
 def atualizar_ocorrencia(ocorrencia_id, payload):
     campos = []
     valores = []
@@ -500,8 +740,12 @@ def atualizar_ocorrencia(ocorrencia_id, payload):
         "placa",
         "motorista",
         "operador",
+        "operador_nome",
+        "operador_email",
         "maquina",
+        "data_hora",
         "horario_alerta",
+        "origem",
         "status",
         "etapa",
         "contato_status",
@@ -510,6 +754,9 @@ def atualizar_ocorrencia(ocorrencia_id, payload):
         "timer_inicio",
         "timer_fim",
         "observacao",
+        "observacao_inicial",
+        "campos_adicionais",
+        "ordem_manual",
         "finalizado_em",
     }
 
@@ -522,6 +769,8 @@ def atualizar_ocorrencia(ocorrencia_id, payload):
                 valor = str(valor).strip().upper()
             if campo in {"status", "etapa", "contato_status", "parada_status"} and valor:
                 valor = str(valor).strip().upper()
+            if campo == "campos_adicionais" and not isinstance(valor, str):
+                valor = json.dumps(valor or {}, ensure_ascii=False)
             campos.append(f"{campo} = ?")
             valores.append(valor)
 
@@ -546,6 +795,19 @@ def atualizar_ocorrencia(ocorrencia_id, payload):
             f"UPDATE ocorrencias SET {', '.join(campos)} WHERE id = ?",
             valores,
         )
+        if payload.get("status") or payload.get("etapa") or payload.get("contato_status") or payload.get("parada_status"):
+            partes = []
+            for campo in ("status", "etapa", "contato_status", "parada_status"):
+                if payload.get(campo):
+                    partes.append(f"{campo}: {payload[campo]}")
+            adicionar_timeline_conn(
+                conn,
+                ocorrencia_id,
+                "ATUALIZACAO",
+                " | ".join(partes),
+                payload.get("operador"),
+                "PAINEL",
+            )
 
 
 def iniciar_timer_ocorrencia(ocorrencia_id, minutos):
@@ -564,10 +826,34 @@ def iniciar_timer_ocorrencia(ocorrencia_id, minutos):
     )
 
 
+def reordenar_ocorrencias(ids):
+    ids = [int(item) for item in ids if str(item).isdigit()]
+    if not ids:
+        return 0
+
+    with get_conn() as conn:
+        for ordem, ocorrencia_id in enumerate(ids, start=1):
+            conn.execute(
+                """
+                UPDATE ocorrencias
+                   SET ordem_manual = ?,
+                       atualizado_em = ?
+                 WHERE id = ?
+                """,
+                (ordem, agora_iso(), ocorrencia_id),
+            )
+
+    return len(ids)
+
+
 def apagar_ocorrencia(ocorrencia_id):
     with get_conn() as conn:
         conn.execute(
             "DELETE FROM notas_turno WHERE referencia_tipo = 'OCORRENCIA' AND referencia_id = ?",
+            (ocorrencia_id,),
+        )
+        conn.execute(
+            "DELETE FROM timeline_ocorrencias WHERE ocorrencia_id = ?",
             (ocorrencia_id,),
         )
         cur = conn.execute("DELETE FROM ocorrencias WHERE id = ?", (ocorrencia_id,))
@@ -742,7 +1028,8 @@ def adicionar_nota_turno(payload):
         mensagem = "Sem observacao informada."
 
     with get_conn() as conn:
-        cur = conn.execute(
+        nota_id = inserir_retorna_id(
+            conn,
             """
             INSERT INTO notas_turno
                 (operador, referencia_tipo, referencia_id, mensagem, apagada, criado_em)
@@ -750,7 +1037,16 @@ def adicionar_nota_turno(payload):
             """,
             (operador, referencia_tipo, referencia_id, mensagem, agora_iso()),
         )
-        return cur.lastrowid
+        if referencia_tipo == "OCORRENCIA" and referencia_id:
+            adicionar_timeline_conn(
+                conn,
+                referencia_id,
+                "OBSERVACAO",
+                mensagem,
+                operador,
+                "PAINEL",
+            )
+        return nota_id
 
 
 def listar_notas_turno(limite=80):
@@ -834,10 +1130,27 @@ def listar_operadores(timeout_online=35):
                 """
                 SELECT operador, COUNT(*) AS total
                   FROM alertas_tratados
-                 WHERE date(criado_em) = ?
+                 WHERE substr(criado_em, 1, 10) = ?
                  GROUP BY operador
                 """,
                 (hoje_iso(),),
+            ).fetchall()
+        }
+
+        ocorrencias_por_operador = {
+            row["operador"]: {
+                "ocorrencias_abertas": int(row["ocorrencias_abertas"] or 0),
+                "fadigas_abertas": int(row["fadigas_abertas"] or 0),
+            }
+            for row in conn.execute(
+                """
+                SELECT operador,
+                       COUNT(*) AS ocorrencias_abertas,
+                       SUM(CASE WHEN UPPER(COALESCE(tipo, '')) = 'FADIGA' THEN 1 ELSE 0 END) AS fadigas_abertas
+                  FROM ocorrencias
+                 WHERE status NOT IN ('FINALIZADA', 'CANCELADA')
+                 GROUP BY operador
+                """
             ).fetchall()
         }
 
@@ -876,6 +1189,8 @@ def listar_operadores(timeout_online=35):
                 "segundos_aberto": max(0, segundos_aberto),
                 "tempo_aberto": formatar_duracao(segundos_aberto),
                 "tratados_hoje": tratados.get(usuario["nome"], 0),
+                "ocorrencias_abertas": ocorrencias_por_operador.get(usuario["nome"], {}).get("ocorrencias_abertas", 0),
+                "fadigas_abertas": ocorrencias_por_operador.get(usuario["nome"], {}).get("fadigas_abertas", 0),
                 "versao": row["versao"] if row else None,
             }
         )
@@ -896,12 +1211,23 @@ def enriquecer_ocorrencia(row):
         timer_estado = "RODANDO" if restante > 0 else "VENCIDO"
 
     duracao_aberta = 0
-    criado = parse_dt(row["criado_em"])
+    criado = parse_dt(item.get("data_hora") or row["criado_em"])
     if criado:
         duracao_aberta = int((agora_dt() - criado).total_seconds())
 
+    try:
+        campos = json.loads(item.get("campos_adicionais") or "{}")
+    except Exception:
+        campos = {}
+
+    item["campos_adicionais"] = campos if isinstance(campos, dict) else {}
+    item["operador_nome"] = item.get("operador_nome") or item.get("operador") or "-"
+    item["operador_email"] = item.get("operador_email") or "N/A"
+    item["data_hora"] = item.get("data_hora") or item.get("horario_alerta") or item.get("criado_em")
+    item["observacao_inicial"] = item.get("observacao_inicial") or item.get("observacao") or ""
     item["alertas_qtd"] = int(item.get("alertas_qtd") or 1)
     item["notas"] = listar_notas_referencia("OCORRENCIA", item["id"], limite=12)
+    item["timeline"] = listar_timeline_ocorrencia(item["id"], limite=80)
     item["alerta_atrasado"] = bool(not finalizada and duracao_aberta >= 45 * 60)
     item["timer_estado"] = timer_estado
     item["timer_restante_segundos"] = restante
@@ -917,13 +1243,35 @@ def enriquecer_ocorrencia(row):
     return item
 
 
-def listar_ocorrencias(apenas_abertas=False, apenas_finalizadas=False, limite=80):
-    filtros = ["UPPER(COALESCE(o.tipo, '')) = 'FADIGA'"]
+def normalizar_horas_historico(valor, padrao=9):
+    try:
+        horas = int(valor or padrao)
+    except Exception:
+        horas = padrao
+
+    return horas if horas in {5, 9, 12, 24} else padrao
+
+
+def listar_ocorrencias(apenas_abertas=False, apenas_finalizadas=False, limite=80, history_hours=9):
+    filtros = ["1 = 1"]
     params = []
+    history_hours = normalizar_horas_historico(history_hours)
+    limite_painel = (agora_dt() - timedelta(hours=history_hours)).isoformat(sep=" ")
+    campo_historico = """
+        CASE
+            WHEN o.status IN ('FINALIZADA', 'CANCELADA')
+                THEN COALESCE(o.finalizado_em, o.atualizado_em, o.criado_em)
+            ELSE COALESCE(o.data_hora, o.horario_alerta, o.criado_em)
+        END
+    """
+
     if apenas_abertas:
         filtros.append("o.status NOT IN ('FINALIZADA', 'CANCELADA')")
     elif apenas_finalizadas:
         filtros.append("o.status IN ('FINALIZADA', 'CANCELADA')")
+
+    filtros.append(f"{campo_historico} >= ?")
+    params.append(limite_painel)
 
     where = f"WHERE {' AND '.join(filtros)}"
 
@@ -950,12 +1298,11 @@ def listar_ocorrencias(apenas_abertas=False, apenas_finalizadas=False, limite=80
              FROM ocorrencias o
               {where}
              ORDER BY
-                  CASE WHEN o.status IN ('ABERTA', 'EM_CONTATO', 'EM_ACOMPANHAMENTO') THEN 0 ELSE 1 END,
-                  CASE
-                      WHEN o.status IN ('FINALIZADA', 'CANCELADA') THEN COALESCE(o.finalizado_em, o.atualizado_em)
-                      ELSE o.atualizado_em
-                  END DESC
-             LIMIT ?
+                  CASE WHEN o.status IN ('FINALIZADA', 'CANCELADA') THEN 1 ELSE 0 END,
+                  CASE WHEN o.ordem_manual IS NULL THEN 999999 ELSE o.ordem_manual END ASC,
+                  COALESCE(o.data_hora, o.horario_alerta, o.criado_em) ASC,
+                  o.id ASC
+              LIMIT ?
             """,
             params + [limite],
         ).fetchall()
@@ -963,8 +1310,8 @@ def listar_ocorrencias(apenas_abertas=False, apenas_finalizadas=False, limite=80
     return [enriquecer_ocorrencia(row) for row in rows]
 
 
-def listar_ocorrencias_finalizadas(limite=120):
-    return listar_ocorrencias(apenas_finalizadas=True, limite=limite)
+def listar_ocorrencias_finalizadas(limite=120, history_hours=9):
+    return listar_ocorrencias(apenas_finalizadas=True, limite=limite, history_hours=history_hours)
 
 
 def montar_resumo_turnos(operadores, ocorrencias_abertas, alertas_por_turno=None):
@@ -1042,7 +1389,7 @@ def contar_alertas_por_turno_hoje():
             """
             SELECT operador, tipo, COUNT(*) AS total
               FROM alertas_tratados
-             WHERE date(criado_em) = ?
+              WHERE substr(criado_em, 1, 10) = ?
              GROUP BY operador, tipo
             """,
             (hoje_iso(),),
@@ -1060,10 +1407,11 @@ def contar_alertas_por_turno_hoje():
     return resumo
 
 
-def resumo_dashboard():
+def resumo_dashboard(history_hours=9):
+    history_hours = normalizar_horas_historico(history_hours)
     operadores = listar_operadores()
-    ocorrencias_abertas = listar_ocorrencias(apenas_abertas=True, limite=30)
-    ocorrencias_finalizadas = listar_ocorrencias_finalizadas(limite=120)
+    ocorrencias_abertas = listar_ocorrencias(apenas_abertas=True, limite=80, history_hours=history_hours)
+    ocorrencias_finalizadas = listar_ocorrencias_finalizadas(limite=160, history_hours=history_hours)
     admins = [op for op in operadores if op.get("admin")]
     usuarios = [op for op in operadores if not op.get("admin")]
 
@@ -1072,7 +1420,7 @@ def resumo_dashboard():
             """
             SELECT COUNT(*) AS total
               FROM alertas_tratados
-             WHERE date(criado_em) = ?
+             WHERE substr(criado_em, 1, 10) = ?
             """,
             (hoje_iso(),),
         ).fetchone()["total"]
@@ -1082,7 +1430,7 @@ def resumo_dashboard():
             SELECT COUNT(*) AS total
               FROM ocorrencias
              WHERE tipo = 'FADIGA'
-               AND date(criado_em) = ?
+               AND substr(criado_em, 1, 10) = ?
             """,
             (hoje_iso(),),
         ).fetchone()["total"]
@@ -1095,6 +1443,7 @@ def resumo_dashboard():
 
     return {
         "agora": agora_iso(),
+        "history_hours": history_hours,
         "operadores": operadores,
         "admins": admins,
         "usuarios": usuarios,

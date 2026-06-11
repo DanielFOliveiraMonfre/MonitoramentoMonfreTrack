@@ -10,11 +10,27 @@ const state = {
     notifiedTimers: new Set(),
     detailClosed: false,
     occurrenceScale: "normal",
+    historyHours: Number(localStorage.getItem("monfretrack-history-hours") || 9),
 };
 
 const currentUser = window.MONFRETRACK_USER || {nome: "daniel.oliveira", admin: false};
 const DEFAULT_OPERATOR = currentUser.nome || "daniel.oliveira";
 const qs = (selector) => document.querySelector(selector);
+
+const ADDITIONAL_FIELD_LABELS = {
+    contrato_programacao: "Contrato da Programação de Carga",
+    programacao_carga: "Programação de Carga",
+    tempo_direcao_continua: "Tempo de direção contínua",
+    tempo_margem: "Tempo de margem",
+    tempo_estimado_destino: "Tempo estimado para o destino",
+    motorista_sinal_fadiga: "Motorista apresenta sinal de fadiga",
+    cobertura_celular: "Celular está com área de cobertura",
+    motorista_atendeu: "Motorista atendeu a ligação",
+    mensagem_sirene: "Foi enviado mensagens e sirene",
+    motorista_aceitou_parar: "Motorista aceitou parar",
+    programacao_acionada: "Setor Programação foi acionado",
+    programador: "Qual programador nos atendeu",
+};
 
 function isEditingOccurrenceNote() {
     return document.activeElement && document.activeElement.id === "occurrence-note";
@@ -41,6 +57,19 @@ function statusLabel(texto) {
 
 function isFadiga(oc) {
     return String(oc.tipo || "").toUpperCase() === "FADIGA";
+}
+
+function occurrenceType(oc) {
+    return String(oc.tipo || oc.evento || "OCORRENCIA").trim().toUpperCase();
+}
+
+function valueOrNA(value) {
+    const text = String(value ?? "").trim();
+    return text || "N/A";
+}
+
+function operatorName(oc) {
+    return valueOrNA(oc.operador_nome || oc.operador);
 }
 
 function isFinalizedOccurrence(oc) {
@@ -97,9 +126,21 @@ function operatorCard(op) {
     const selected = state.selectedOperator === op.operador ? "selected" : "";
     const onlineText = op.online ? "Online" : "Offline";
     const tempo = op.online ? op.tempo_aberto : "-";
+    const fadigas = Number(op.fadigas_abertas || 0);
+    const ocorrencias = Number(op.ocorrencias_abertas || 0);
+    const priorityClass = [
+        op.online ? "op-online" : "",
+        ocorrencias ? "op-occurrence" : "",
+        fadigas ? "op-fatigue" : "",
+    ].filter(Boolean).join(" ");
+    const priorityBadges = [
+        op.online ? `<span class="operator-badge active">ATIVO</span>` : "",
+        ocorrencias ? `<span class="operator-badge occurrence">${ocorrencias} OCORR.</span>` : "",
+        fadigas ? `<span class="operator-badge fatigue">${fadigas} FADIGA</span>` : "",
+    ].join("");
 
     return `
-        <article class="operator-card ${selected}" data-operator="${op.operador}">
+        <article class="operator-card ${selected} ${priorityClass}" data-operator="${op.operador}">
             <div class="operator-card-head">
                 <div>
                     <strong>${op.operador}</strong>
@@ -107,6 +148,7 @@ function operatorCard(op) {
                 </div>
                 <span class="status-pill ${statusClass(op.status, op.online)}">${onlineText}</span>
             </div>
+            ${priorityBadges ? `<div class="operator-priority-badges">${priorityBadges}</div>` : ""}
             <div class="operator-card-stats">
                 <div><span>Status</span><b>${statusLabel(op.status)}</b></div>
                 <div><span>Tratados</span><b>${op.tratados_hoje || 0}</b></div>
@@ -207,7 +249,7 @@ function renderTurnos(data) {
 }
 
 function predominanceCard(turno) {
-    const tipos = Array.isArray(turno.alertas_tipos) ? turno.alertas_tipos : [];
+    const tipos = Array.isArray(turno.alertas_por_tipo) ? turno.alertas_por_tipo : [];
     const predominante = turno.alerta_predominante && turno.alerta_predominante !== "-"
         ? statusLabel(turno.alerta_predominante)
         : "-";
@@ -245,16 +287,27 @@ function occurrenceBadge(oc) {
     return `<span class="occurrence-state ${visual.cls}">${visual.label}</span>`;
 }
 
-function occurrenceTitle(oc) {
+function legacyOccurrenceTitle(oc) {
     return "OCORRÊNCIA DE FADIGA";
 }
 
-function occurrenceSubtitle(oc) {
+function legacyOccurrenceSubtitle(oc) {
     if (isFadiga(oc)) {
         return `Tratando: ${oc.operador || "-"} / ${oc.maquina || "-"}`;
     }
 
     return `Tratando: ${oc.operador || "-"} / ${oc.maquina || "-"}`;
+}
+
+function occurrenceTitle(oc) {
+    const tipo = occurrenceType(oc);
+    if (tipo === "FADIGA") return "OCORRÊNCIA DE FADIGA";
+    if (tipo === "PARADA PREVENTIVA") return "PARADA PREVENTIVA";
+    return statusLabel(tipo);
+}
+
+function occurrenceSubtitle(oc) {
+    return `Registrado por: ${operatorName(oc)}${oc.operador_email && oc.operador_email !== "N/A" ? " / " + oc.operador_email : ""}`;
 }
 
 function occurrenceCard(oc, compact = false) {
@@ -282,8 +335,11 @@ function occurrenceCard(oc, compact = false) {
             ? `<button class="card-action secondary" data-card-action="details">Acompanhar</button>`
             : `<button class="card-action secondary" data-card-action="finalizar">Finalizar</button>`;
 
+    const evento = occurrenceType(oc);
+    const responsavel = operatorName(oc);
+
     return `
-        <article class="occurrence-card ${selected} ${visual.cls}" data-occurrence-id="${oc.id}">
+        <article class="occurrence-card ${selected} ${visual.cls} type-${evento.replaceAll(" ", "-").toLowerCase()}" data-occurrence-id="${oc.id}" draggable="${compact || finalizada ? "false" : "true"}">
             <div class="occurrence-top">
                 <div>
                     ${occurrenceBadge(oc)}
@@ -300,15 +356,19 @@ function occurrenceCard(oc, compact = false) {
             </div>
             <div class="card-mid">
                 <div>
-                    <span>Operador</span>
-                    <strong>${escapeHtml(oc.operador || "-")}</strong>
+                    <span>Responsável</span>
+                    <strong>${escapeHtml(responsavel)}</strong>
                 </div>
                 <div class="active-time ${visual.cls}">
                     <strong>${oc.tempo_ocorrencia || oc.idade || "-"}</strong>
                     <span>tempo ativo</span>
                 </div>
             </div>
-            <p class="last-note" title="${escapeHtml(oc.ultima_observacao || oc.observacao || "")}">${escapeHtml(noteText)}</p>
+            <div class="occurrence-event-line">
+                <span>${escapeHtml(statusLabel(evento))}</span>
+                <small>${escapeHtml(formatDateTime(oc.data_hora || oc.horario_alerta || oc.criado_em))}</small>
+            </div>
+            <p class="last-note" title="${escapeHtml(oc.ultima_observacao || oc.observacao || oc.observacao_inicial || "")}">${escapeHtml(noteText)}</p>
             ${timerBlock}
             <div class="card-actions">
                 <button class="card-action" data-card-action="details">${cardAction}</button>
@@ -326,7 +386,7 @@ function renderDashboard(data) {
     if (qs("#metric-online")) qs("#metric-online").textContent = data.operadores_online;
     if (qs("#metric-offline")) qs("#metric-offline").textContent = data.operadores_offline;
     if (qs("#metric-tratados")) qs("#metric-tratados").textContent = data.alertas_tratados_hoje;
-    if (qs("#metric-fadigas")) qs("#metric-fadigas").textContent = data.ocorrencias_abertas.length;
+    if (qs("#metric-fadigas")) qs("#metric-fadigas").textContent = data.ocorrencias_abertas.filter(isFadiga).length;
 
     const resumo = qs("#ocorrencias-resumo");
     if (resumo) {
@@ -368,7 +428,7 @@ function renderOccurrenceKpis(data) {
     });
 }
 
-function renderOperation(data) {
+function legacyRenderOperation(data) {
     const lista = qs("#ocorrencias-operacao");
     if (!lista) return;
 
@@ -408,7 +468,7 @@ function renderOperation(data) {
     }
 }
 
-function renderDetail(data) {
+function legacyRenderDetail(data) {
     const box = qs("#detail-box");
     if (!box) return;
 
@@ -566,6 +626,271 @@ function renderDetail(data) {
     }
 }
 
+function openOccurrenceModal(id, data) {
+    state.selectedOccurrenceId = Number(id);
+    state.detailClosed = false;
+    renderDetail(data || state.lastData || {});
+    const modal = qs("#occurrence-modal");
+    if (modal) {
+        modal.hidden = false;
+        modal.setAttribute("aria-hidden", "false");
+    }
+}
+
+function closeOccurrenceModal() {
+    state.selectedOccurrenceId = null;
+    state.detailClosed = true;
+    const modal = qs("#occurrence-modal");
+    if (modal) {
+        modal.hidden = true;
+        modal.setAttribute("aria-hidden", "true");
+    }
+    if (state.lastData) renderOperation(state.lastData);
+}
+
+function additionalFieldsHtml(oc) {
+    const campos = oc.campos_adicionais && typeof oc.campos_adicionais === "object" ? oc.campos_adicionais : {};
+    return Object.entries(ADDITIONAL_FIELD_LABELS).map(([key, label]) => `
+        <div class="detail-row">
+            <span>${escapeHtml(label)}</span>
+            <strong>${escapeHtml(valueOrNA(campos[key]))}</strong>
+        </div>
+    `).join("");
+}
+
+function timelineHtml(oc) {
+    const timeline = Array.isArray(oc.timeline) && oc.timeline.length
+        ? oc.timeline
+        : [
+            {criado_em: oc.data_hora || oc.criado_em, mensagem: `${occurrenceTitle(oc)} registrada`, tipo: "CRIACAO"},
+            isFinalizedOccurrence(oc) ? {criado_em: oc.finalizado_em || oc.atualizado_em, mensagem: "Ocorrência finalizada", tipo: "FINALIZADA"} : null,
+        ].filter(Boolean);
+
+    return `
+        <div class="timeline">
+            <strong>Linha do tempo</strong>
+            ${timeline.map((item) => `
+                <div class="timeline-item ${String(item.tipo || "").toLowerCase().includes("final") ? "ok" : "info"}">
+                    <span>${formatTimeOnly(item.criado_em)}</span>
+                    <p>${escapeHtml(item.mensagem || "-")}</p>
+                </div>
+            `).join("")}
+        </div>
+    `;
+}
+
+function bindOccurrenceDrag(lista) {
+    let dragging = null;
+    lista.querySelectorAll(".occurrence-card[draggable='true']").forEach((card) => {
+        card.addEventListener("dragstart", (event) => {
+            dragging = card;
+            card.classList.add("dragging");
+            event.dataTransfer.effectAllowed = "move";
+            event.dataTransfer.setData("text/plain", card.dataset.occurrenceId);
+        });
+        card.addEventListener("dragend", () => {
+            card.classList.remove("dragging");
+            dragging = null;
+            saveOccurrenceOrder(lista);
+        });
+        card.addEventListener("dragover", (event) => {
+            event.preventDefault();
+            const target = event.currentTarget;
+            if (!dragging || dragging === target) return;
+            const rect = target.getBoundingClientRect();
+            const before = event.clientY < rect.top + rect.height / 2;
+            lista.insertBefore(dragging, before ? target : target.nextSibling);
+        });
+    });
+}
+
+async function saveOccurrenceOrder(lista) {
+    const ids = [...lista.querySelectorAll(".occurrence-card")]
+        .map((card) => Number(card.dataset.occurrenceId))
+        .filter(Boolean);
+    if (!ids.length) return;
+    await fetch("/api/ocorrencias/ordem", {
+        method: "PATCH",
+        headers: {"Content-Type": "application/json"},
+        body: JSON.stringify({ids}),
+    }).catch(() => {});
+}
+
+function renderOperation(data) {
+    const lista = qs("#ocorrencias-operacao");
+    if (!lista) return;
+
+    renderOccurrenceKpis(data);
+
+    const base = data.ocorrencias_operacao || data.ocorrencias_abertas || [];
+    const ocorrencias = filteredOccurrences(base.concat([]));
+    lista.innerHTML = ocorrencias.length
+        ? ocorrencias.map((oc) => occurrenceCard(oc, false)).join("")
+        : `<div class="empty-block">Nenhuma ocorrência nesta visão.</div>`;
+
+    lista.querySelectorAll(".occurrence-card").forEach((card) => {
+        card.addEventListener("click", (event) => {
+            if (event.target.dataset.cardAction === "finalizar") {
+                event.stopPropagation();
+                handleOccurrenceAction(Number(card.dataset.occurrenceId), "finalizar");
+                return;
+            }
+            openOccurrenceModal(Number(card.dataset.occurrenceId), data);
+        });
+    });
+    bindOccurrenceDrag(lista);
+
+    if (state.selectedOccurrenceId && !base.some((oc) => oc.id === state.selectedOccurrenceId)) {
+        closeOccurrenceModal();
+        return;
+    }
+
+    const modal = qs("#occurrence-modal");
+    const modalOpen = modal && !modal.hidden;
+    if (modalOpen && !isEditingOccurrenceNote()) {
+        renderDetail(data);
+    }
+}
+
+function renderDetail(data) {
+    const box = qs("#detail-box");
+    if (!box) return;
+
+    const base = data.ocorrencias_operacao || data.ocorrencias_abertas || [];
+    const oc = base.find((item) => item.id === state.selectedOccurrenceId);
+    if (!oc) {
+        box.className = "detail-box empty-detail";
+        box.innerHTML = `<strong>Nenhuma ocorrência selecionada</strong>`;
+        return;
+    }
+
+    const visual = occurrenceVisual(oc);
+    const finalizada = isFinalizedOccurrence(oc);
+    const notas = Array.isArray(oc.notas) ? oc.notas : [];
+    const timerValue = Math.max(5, Math.min(30, Number(oc.timer_minutos || 10)));
+    const obsInicial = valueOrNA(oc.observacao_inicial || oc.observacao);
+    const timerDetail = finalizada ? "" : `
+        <div class="detail-row"><span>Timer</span><strong>${escapeHtml(oc.timer_restante || "-")}</strong></div>
+    `;
+    const actionsHtml = finalizada ? `
+        <div class="finalized-banner">
+            <strong>Ocorrência finalizada</strong>
+            <span>Histórico preservado até ${escapeHtml(formatDateTime(oc.finalizado_em || oc.atualizado_em || "-"))}</span>
+        </div>
+    ` : `
+        <div class="detail-actions">
+            <button class="primary" data-action="contato">Contato feito</button>
+            <button class="warning" data-action="sem-contato">Sem contato</button>
+            <button class="success" data-action="aceitou">Aceitou parar</button>
+            <button class="danger" data-action="recusou">Recusou</button>
+            <button data-action="finalizar">Finalizar</button>
+        </div>
+        <div class="timer-picker">
+            <div>
+                <span>Timer de parada</span>
+                <strong id="timer-minutes-label">${timerValue} min</strong>
+            </div>
+            <input id="timer-minutes" type="range" min="5" max="30" step="1" value="${timerValue}">
+            <button class="primary-button" data-action="timer">Iniciar timer</button>
+        </div>
+    `;
+    const notasHtml = notas.length ? `
+        <div class="saved-notes">
+            <strong>Observações adicionais</strong>
+            ${notas.map((nota) => `
+                <article>
+                    <span>${escapeHtml(nota.operador)} / ${escapeHtml(formatDateTime(nota.criado_em))}</span>
+                    <p>${escapeHtml(nota.mensagem)}</p>
+                </article>
+            `).join("")}
+        </div>
+    ` : `<div class="saved-notes"><strong>Observações adicionais</strong><article><p>Sem observações adicionais.</p></article></div>`;
+    const adminDeleteHtml = currentUser.admin ? `
+        <div class="admin-danger-zone">
+            <div>
+                <strong>Admin</strong>
+                <span>Apaga esta ocorrência e as observações anexadas.</span>
+            </div>
+            <button class="danger-button" data-action="delete-occurrence">Apagar ocorrência</button>
+        </div>
+    ` : "";
+
+    box.className = "detail-box";
+    box.innerHTML = `
+        <div class="detail-title">
+            <div>
+                <div class="plate">${escapeHtml(occurrenceTitle(oc))}</div>
+                <div class="motorista">${escapeHtml(occurrenceSubtitle(oc))}</div>
+            </div>
+        </div>
+        <div class="detail-state-line">
+            ${occurrenceBadge(oc)}
+            <span>${escapeHtml(oc.tempo_ocorrencia || oc.idade || "-")} de ocorrência</span>
+        </div>
+
+        <div class="detail-grid modal-main-grid">
+            <div class="detail-row featured"><span>Evento</span><strong>${escapeHtml(statusLabel(occurrenceType(oc)))}</strong></div>
+            <div class="detail-row featured"><span>Placa</span><strong>${escapeHtml(oc.placa || "-")}</strong></div>
+            <div class="detail-row featured wide"><span>Motorista</span><strong>${escapeHtml(oc.motorista || "N/A")}</strong></div>
+            <div class="detail-row"><span>Data/Hora</span><strong>${escapeHtml(formatDateTime(oc.data_hora || oc.horario_alerta || oc.criado_em))}</strong></div>
+            <div class="detail-row"><span>Quem registrou</span><strong>${escapeHtml(operatorName(oc))}</strong></div>
+            <div class="detail-row"><span>E-mail</span><strong>${escapeHtml(valueOrNA(oc.operador_email))}</strong></div>
+            <div class="detail-row"><span>Status</span><strong>${escapeHtml(statusLabel(oc.status))}</strong></div>
+            <div class="detail-row"><span>Etapa</span><strong>${escapeHtml(statusLabel(oc.etapa))}</strong></div>
+            <div class="detail-row"><span>Contato</span><strong>${escapeHtml(statusLabel(oc.contato_status))}</strong></div>
+            <div class="detail-row"><span>Parada</span><strong>${escapeHtml(statusLabel(oc.parada_status))}</strong></div>
+            ${timerDetail}
+            <div class="detail-row"><span>Observações</span><strong>${oc.observacoes_qtd || 0}</strong></div>
+        </div>
+
+        <section class="modal-section">
+            <h3>Informações adicionais</h3>
+            <div class="detail-grid">${additionalFieldsHtml(oc)}</div>
+        </section>
+
+        <section class="modal-section">
+            <h3>Observação inicial</h3>
+            <p class="initial-note">${escapeHtml(obsInicial === "N/A" ? "Sem observações" : obsInicial)}</p>
+        </section>
+
+        ${timelineHtml(oc)}
+        ${actionsHtml}
+        ${adminDeleteHtml}
+
+        <div class="note-compose">
+            <label>
+                Observação / anexo
+                <textarea id="occurrence-note" rows="4" placeholder="Adicione observações, combinado, pendência ou anexo textual."></textarea>
+            </label>
+            <button class="primary-button" id="send-occurrence-note">Anexar observação</button>
+            ${notasHtml}
+        </div>
+    `;
+
+    box.querySelectorAll("button[data-action]").forEach((button) => {
+        button.addEventListener("click", () => handleOccurrenceAction(oc.id, button.dataset.action));
+    });
+
+    const noteButton = qs("#send-occurrence-note");
+    if (noteButton) noteButton.addEventListener("click", () => sendOccurrenceNote(oc.id));
+
+    const timerRange = qs("#timer-minutes");
+    const timerLabel = qs("#timer-minutes-label");
+    if (timerRange && timerLabel) {
+        timerRange.addEventListener("input", () => {
+            timerLabel.textContent = `${timerRange.value} min`;
+        });
+    }
+
+    const noteField = qs("#occurrence-note");
+    if (noteField) {
+        noteField.value = state.occurrenceDrafts[oc.id] || "";
+        noteField.addEventListener("input", () => {
+            state.occurrenceDrafts[oc.id] = noteField.value;
+        });
+    }
+}
+
 async function sendOccurrenceNote(id) {
     const note = qs("#occurrence-note");
     if (!note || !note.value.trim()) return;
@@ -589,9 +914,7 @@ async function sendOccurrenceNote(id) {
 
 async function handleOccurrenceAction(id, action) {
     if (action === "close-detail") {
-        state.selectedOccurrenceId = null;
-        state.detailClosed = true;
-        if (state.lastData) renderOperation(state.lastData);
+        closeOccurrenceModal();
         return;
     }
 
@@ -614,7 +937,7 @@ async function handleOccurrenceAction(id, action) {
         }
 
         state.selectedOccurrenceId = null;
-        state.detailClosed = true;
+        closeOccurrenceModal();
         delete state.occurrenceDrafts[id];
         return refreshAll();
     }
@@ -740,6 +1063,30 @@ function setupOccurrenceScale() {
     });
 }
 
+function applyHistoryWindow(hours) {
+    const allowed = [5, 9, 12, 24];
+    const selected = allowed.includes(Number(hours)) ? Number(hours) : 9;
+    state.historyHours = selected;
+    localStorage.setItem("monfretrack-history-hours", String(selected));
+
+    document.querySelectorAll("[data-history-hours]").forEach((button) => {
+        button.classList.toggle("active", Number(button.dataset.historyHours) === selected);
+    });
+}
+
+function setupHistoryWindow() {
+    const control = qs("#history-window-control");
+    if (!control) return;
+
+    applyHistoryWindow(state.historyHours);
+    control.querySelectorAll("[data-history-hours]").forEach((button) => {
+        button.addEventListener("click", async () => {
+            applyHistoryWindow(button.dataset.historyHours);
+            await refreshAll();
+        });
+    });
+}
+
 function showToast(message) {
     let container = qs("#toast-container");
     if (!container) {
@@ -775,8 +1122,7 @@ function notifyTimerEnd(oc) {
         });
         notification.onclick = () => {
             window.focus();
-            state.selectedOccurrenceId = oc.id;
-            if (state.lastData) renderOperation(state.lastData);
+            openOccurrenceModal(oc.id, state.lastData);
         };
     }
 }
@@ -994,7 +1340,7 @@ async function createHandoverOccurrence(event) {
 
 async function loadData() {
     try {
-        const response = await fetch("/api/dashboard", {cache: "no-store"});
+        const response = await fetch(`/api/dashboard?history_hours=${state.historyHours}`, {cache: "no-store"});
         const data = await response.json();
         state.lastData = data;
 
@@ -1024,9 +1370,22 @@ function bindButtons() {
             state.handoverDraft = handoverMessage.value;
         });
     }
+    const modal = qs("#occurrence-modal");
+    if (modal) {
+        modal.addEventListener("click", (event) => {
+            if (event.target === modal) closeOccurrenceModal();
+        });
+    }
+    document.querySelectorAll("[data-action='close-detail']").forEach((button) => {
+        button.addEventListener("click", closeOccurrenceModal);
+    });
+    document.addEventListener("keydown", (event) => {
+        if (event.key === "Escape") closeOccurrenceModal();
+    });
     setupNotificationControl();
     setupSidebarToggle();
     setupOccurrenceScale();
+    setupHistoryWindow();
     document.addEventListener("click", requestNotificationPermission, {once: true});
 
     document.querySelectorAll(".segment").forEach((button) => {

@@ -1,11 +1,11 @@
 # MonfreTrack Central - Flask
 
-Painel local para apresentar operadores online, alertas tratados e ocorrencias de fadiga.
+Painel operacional para operadores online, alertas tratados, ocorrências e troca de turno.
 
-## Como rodar
+## Como Rodar Local
 
 ```powershell
-cd C:\Users\DANIEL.OLIVEIRA\Documents\Codex\2026-05-12\oi\painel_flask
+cd "C:\Users\DANIEL.OLIVEIRA\OneDrive - MONFREDINI TRANSPORTES LTDA\Área de Trabalho\painel_flask"
 python -m venv .venv
 .\.venv\Scripts\activate
 pip install -r requirements.txt
@@ -18,29 +18,26 @@ Abra:
 http://127.0.0.1:5000
 ```
 
-## Persistência no Render
+## Persistência No Render
 
-Por padrão o painel usa `painel.db` dentro da pasta do projeto. Em serviços como Render, essa pasta pode ser recriada em deploy/restart e apagar os dados. Para manter histórico, configure um caminho persistente:
+Para produção no Render, use PostgreSQL. Não use SQLite local como fonte principal de histórico, porque deploy/restart pode recriar a pasta do projeto.
+
+Configure:
 
 ```text
-PAINEL_DB_PATH=/var/data/painel.db
+DATABASE_URL=postgresql://usuario:senha@host:porta/banco
 MONFRETRACK_TZ=America/Sao_Paulo
 ```
 
-Depois monte um Persistent Disk em `/var/data` ou use outro armazenamento persistente equivalente.
-
-Se quiser abrir em outro computador da mesma rede, use o IP do seu PC:
-
-```text
-http://SEU_IP:5000
-```
+O endpoint do Power Automate só responde sucesso depois que a ocorrência é salva no banco.
 
 ## Telas
 
-- `/` mostra dashboard geral.
-- `/operacao` mostra a fila de ocorrencias de fadiga.
+- `/` mostra o dashboard geral.
+- `/operacao` mostra a fila de ocorrências recebidas do Forms/Power Automate.
+- `/troca-turno` mostra o chat de repasse.
 
-## API principal
+## APIs Principais
 
 ### Heartbeat
 
@@ -57,7 +54,7 @@ POST /api/heartbeat
 }
 ```
 
-### Contador de alerta tratado
+### Contador De Alerta Tratado
 
 ```http
 POST /api/alerta-tratado
@@ -73,28 +70,20 @@ POST /api/alerta-tratado
 }
 ```
 
-### Criar ocorrencia de fadiga
+### Receber Ocorrência Do Forms / Power Automate
 
 ```http
-POST /api/ocorrencias
+POST /api/forms/ocorrencia
+POST /api/power-automate/ocorrencia
 ```
 
 ```json
 {
-  "external_id": "QSS7G98-1710000000",
-  "tipo": "FADIGA",
-  "placa": "QSS7G98",
-  "motorista": "EDVANIO DIAS DA SILVA",
-  "operador": "daniel.oliveira",
-  "maquina": "MONITOR-01",
-  "status": "ABERTA",
-  "etapa": "AGUARDANDO_CONTATO",
-  "contato_status": "PENDENTE",
-  "parada_status": "PENDENTE"
+  "texto": "Registro feito por: Filipe Brito - filipe.brito@monfredinitransportes.com.br\nEvento: PARADA PREVENTIVA\nPlaca: UEQ7B48\nMotorista: IDEILDO SILVA TELES\nData/Hora: 28/05/2026 06:54\nObservação: Aguardando retorno."
 }
 ```
 
-### Atualizar ocorrencia
+### Atualizar Ocorrência
 
 ```http
 PATCH /api/ocorrencias/1
@@ -109,7 +98,7 @@ PATCH /api/ocorrencias/1
 }
 ```
 
-### Iniciar timer
+### Iniciar Timer
 
 ```http
 POST /api/ocorrencias/1/timer

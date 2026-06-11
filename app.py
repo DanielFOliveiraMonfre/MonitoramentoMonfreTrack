@@ -6,6 +6,7 @@ import os
 from flask import Flask, jsonify, redirect, render_template, request, send_file, session, url_for
 
 import database
+from forms_parser import parse_forms_payload
 
 
 app = Flask(__name__)
@@ -52,6 +53,10 @@ def admin_required(func):
         return func(*args, **kwargs)
 
     return wrapper
+
+
+def obter_history_hours():
+    return database.normalizar_horas_historico(request.args.get("history_hours"))
 
 
 @app.get("/logo.png")
@@ -120,7 +125,7 @@ def troca_turno():
 
 @app.get("/api/dashboard")
 def api_dashboard():
-    return jsonify(database.resumo_dashboard())
+    return jsonify(database.resumo_dashboard(history_hours=obter_history_hours()))
 
 
 @app.get("/api/operadores")
@@ -161,6 +166,7 @@ def api_listar_ocorrencias():
         "ocorrencias": database.listar_ocorrencias(
             apenas_abertas=abertas,
             apenas_finalizadas=finalizadas,
+            history_hours=obter_history_hours(),
         )
     })
 
@@ -172,6 +178,32 @@ def api_criar_ocorrencia():
         payload["operador"] = usuario_logado()["nome"]
     ocorrencia_id = database.criar_ocorrencia(payload)
     return jsonify({"ok": True, "ocorrencia_id": ocorrencia_id})
+
+
+@app.post("/api/forms/ocorrencia")
+@app.post("/api/power-automate/ocorrencia")
+def api_forms_ocorrencia():
+    if os.environ.get("RENDER") and not database.USING_POSTGRES:
+        return jsonify({
+            "ok": False,
+            "erro": "DATABASE_URL nao configurado. O Render precisa de PostgreSQL persistente para salvar historico.",
+        }), 503
+
+    payload = request.get_json(silent=True) or {}
+    try:
+        dados = parse_forms_payload(payload)
+        ocorrencia_id = database.criar_ocorrencia_forms(dados)
+    except Exception as exc:
+        return jsonify({"ok": False, "erro": str(exc)}), 400
+
+    return jsonify({"ok": True, "ocorrencia_id": ocorrencia_id, "ocorrencia": dados})
+
+
+@app.patch("/api/ocorrencias/ordem")
+def api_reordenar_ocorrencias():
+    payload = request.get_json(silent=True) or {}
+    total = database.reordenar_ocorrencias(payload.get("ids") or [])
+    return jsonify({"ok": True, "total": total})
 
 
 @app.patch("/api/ocorrencias/<int:ocorrencia_id>")
