@@ -24,18 +24,17 @@ Variaveis obrigatorias:
 DATABASE_URL=postgresql://usuario:senha@host:porta/banco
 MONFRETRACK_TZ=America/Sao_Paulo
 FORMS_PLANILHA_URL=https://link-compartilhado-do-sharepoint?e=TOKEN&download=1
-FORMS_PLANILHA_INTERVALO=15
 FORMS_PLANILHA_FONTE=forms_ocorrencias
 WEB_CONCURRENCY=1
 ```
 
-O link da planilha deve ficar somente nas variaveis de ambiente do Render. Nao publique o link no codigo ou no GitHub.
+O link da planilha deve ficar somente nas variaveis de ambiente do Render. Nao publique o link no codigo ou no GitHub. Links de compartilhamento do SharePoint sao convertidos automaticamente para download direto e consultados a cada 15 segundos.
 
 ## Origem das ocorrencias
 
 As ocorrencias sao criadas exclusivamente pela planilha Excel ligada ao Microsoft Forms.
 
-Na primeira sincronizacao, o maior `Id` existente vira a linha de corte e nenhuma resposta antiga e importada. Depois disso, somente linhas com `Id` maior sao processadas. O ultimo ID e cada linha importada ficam persistidos no PostgreSQL.
+Na primeira sincronizacao, somente a resposta de maior `Id` e importada; as respostas anteriores ficam marcadas como historico. Depois disso, todas as linhas com `Id` maior sao processadas. O ultimo ID e cada linha importada ficam persistidos no PostgreSQL.
 
 O executavel MonfreTrack continua enviando:
 

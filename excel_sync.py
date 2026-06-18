@@ -7,6 +7,7 @@ import unicodedata
 from datetime import date, datetime, time as datetime_time
 from io import BytesIO
 from http.cookiejar import CookieJar
+from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
 from urllib.request import HTTPCookieProcessor, Request, build_opener
 
 from openpyxl import load_workbook
@@ -17,7 +18,8 @@ from forms_parser import slug_operador, valor_ou_na
 
 PLANILHA_URL = (os.environ.get("FORMS_PLANILHA_URL") or "").strip()
 FONTE = (os.environ.get("FORMS_PLANILHA_FONTE") or "forms_ocorrencias").strip()
-INTERVALO = max(5, int(os.environ.get("FORMS_PLANILHA_INTERVALO") or 15))
+# O Forms precisa aparecer rapidamente na operacao; no Render o ciclo e fixo.
+INTERVALO = 15
 TIMEOUT = max(10, int(os.environ.get("FORMS_PLANILHA_TIMEOUT") or 30))
 
 _thread = None
@@ -169,10 +171,29 @@ def linha_para_payload(linha, fonte=FONTE):
     }
 
 
+def _url_download_direto(url):
+    partes = urlsplit(str(url or "").strip())
+    if "sharepoint.com" not in partes.netloc.lower():
+        return url
+
+    parametros = parse_qsl(partes.query, keep_blank_values=True)
+    if not any(chave.lower() == "download" for chave, _valor_query in parametros):
+        parametros.append(("download", "1"))
+    return urlunsplit((
+        partes.scheme,
+        partes.netloc,
+        partes.path,
+        urlencode(parametros),
+        partes.fragment,
+    ))
+
+
 def _baixar_planilha(url):
     if os.path.exists(url):
         with open(url, "rb") as arquivo:
             return arquivo.read()
+
+    url = _url_download_direto(url)
 
     request = Request(
         url,
@@ -185,8 +206,13 @@ def _baixar_planilha(url):
     opener = build_opener(HTTPCookieProcessor(cookies))
     with opener.open(request, timeout=TIMEOUT) as resposta:
         conteudo = resposta.read()
+        tipo_conteudo = resposta.headers.get("Content-Type", "desconhecido")
     if not conteudo:
         raise RuntimeError("A planilha retornou um arquivo vazio")
+    if not conteudo.startswith(b"PK"):
+        raise RuntimeError(
+            f"O link nao retornou um arquivo XLSX (Content-Type: {tipo_conteudo})"
+        )
     return conteudo
 
 
@@ -249,26 +275,28 @@ def sincronizar_planilha(url=None, fonte=FONTE):
         maior_id = max((_id_linha(linha) or 0 for linha in linhas), default=0)
         estado = database.obter_estado_sincronizacao_excel(fonte)
 
-        if not estado:
-            database.inicializar_sincronizacao_excel(fonte, maior_id)
-            agora = database.agora_iso()
-            _atualizar_status(
-                ativo=True,
-                ultima_sincronizacao=agora,
-                ultimo_erro=None,
-                ultimo_id=maior_id,
-                importados_ultima_execucao=0,
-            )
-            return {
-                "ok": True,
-                "inicializado": True,
-                "ultimo_id": maior_id,
-                "importados": 0,
-                "mensagem": "Historico existente marcado como conhecido; somente novas linhas serao importadas",
-            }
+        inicializado = not bool(estado)
+        if inicializado:
+            # Evita importar todo o historico, mas preserva a resposta que motivou
+            # a ativacao do sincronizador.
+            database.inicializar_sincronizacao_excel(fonte, max(0, maior_id - 1))
+            estado = database.obter_estado_sincronizacao_excel(fonte)
 
         ultimo_id = int(estado.get("ultimo_id") or 0)
         novas = [linha for linha in linhas if (_id_linha(linha) or 0) > ultimo_id]
+        recuperou_linha_corte = False
+        if (
+            not inicializado
+            and ultimo_id > 0
+            and not database.linha_excel_importada(fonte, ultimo_id)
+        ):
+            linha_corte = next(
+                (linha for linha in linhas if _id_linha(linha) == ultimo_id),
+                None,
+            )
+            if linha_corte is not None:
+                novas.insert(0, linha_corte)
+                recuperou_linha_corte = True
         importados = 0
         ignorados = 0
 
@@ -307,10 +335,12 @@ def sincronizar_planilha(url=None, fonte=FONTE):
         )
         return {
             "ok": True,
+            "inicializado": inicializado,
             "ultimo_id": ultimo_id,
             "novas_linhas": len(novas),
             "importados": importados,
             "ignorados": ignorados,
+            "recuperou_linha_corte": recuperou_linha_corte,
         }
     except Exception as exc:
         erro = f"{type(exc).__name__}: {exc}"
