@@ -1,43 +1,56 @@
 # MonfreTrack Central - Flask
 
-Painel operacional para operadores online, alertas tratados, ocorrências e troca de turno.
+Painel operacional para operadores online, alertas tratados, ocorrencias e troca de turno.
 
-## Como Rodar Local
+## Como rodar local
 
 ```powershell
-cd "C:\Users\DANIEL.OLIVEIRA\OneDrive - MONFREDINI TRANSPORTES LTDA\Área de Trabalho\painel_flask"
+cd "C:\caminho\painel_flask"
 python -m venv .venv
 .\.venv\Scripts\activate
 pip install -r requirements.txt
 python app.py
 ```
 
-Abra:
+Abra `http://127.0.0.1:5000`.
 
-```text
-http://127.0.0.1:5000
-```
+## Render e persistencia
 
-## Persistência No Render
+Em producao, use PostgreSQL. O SQLite local do Render nao deve ser usado como fonte principal, pois pode ser perdido em reinicios e deploys.
 
-Para produção no Render, use PostgreSQL. Não use SQLite local como fonte principal de histórico, porque deploy/restart pode recriar a pasta do projeto.
-
-Configure:
+Variaveis obrigatorias:
 
 ```text
 DATABASE_URL=postgresql://usuario:senha@host:porta/banco
 MONFRETRACK_TZ=America/Sao_Paulo
+FORMS_PLANILHA_URL=https://link-compartilhado-do-sharepoint?e=TOKEN&download=1
+FORMS_PLANILHA_INTERVALO=15
+FORMS_PLANILHA_FONTE=forms_ocorrencias
+WEB_CONCURRENCY=1
 ```
 
-O endpoint do Power Automate só responde sucesso depois que a ocorrência é salva no banco.
+O link da planilha deve ficar somente nas variaveis de ambiente do Render. Nao publique o link no codigo ou no GitHub.
+
+## Origem das ocorrencias
+
+As ocorrencias sao criadas exclusivamente pela planilha Excel ligada ao Microsoft Forms.
+
+Na primeira sincronizacao, o maior `Id` existente vira a linha de corte e nenhuma resposta antiga e importada. Depois disso, somente linhas com `Id` maior sao processadas. O ultimo ID e cada linha importada ficam persistidos no PostgreSQL.
+
+O executavel MonfreTrack continua enviando:
+
+- heartbeat e status do operador;
+- contador de alertas tratados.
+
+O executavel nao cria mais ocorrencias. As rotas antigas `POST /api/ocorrencias`, `POST /api/forms/ocorrencia` e `POST /api/power-automate/ocorrencia` retornam HTTP 410.
 
 ## Telas
 
 - `/` mostra o dashboard geral.
-- `/operacao` mostra a fila de ocorrências recebidas do Forms/Power Automate.
+- `/operacao` mostra a fila de ocorrencias recebidas do Excel do Forms.
 - `/troca-turno` mostra o chat de repasse.
 
-## APIs Principais
+## APIs principais
 
 ### Heartbeat
 
@@ -45,67 +58,38 @@ O endpoint do Power Automate só responde sucesso depois que a ocorrência é sa
 POST /api/heartbeat
 ```
 
-```json
-{
-  "operador": "daniel.oliveira",
-  "maquina": "MONITOR-01",
-  "status": "RODANDO",
-  "versao": "1.0"
-}
-```
-
-### Contador De Alerta Tratado
+### Contador de alerta tratado
 
 ```http
 POST /api/alerta-tratado
 ```
 
-```json
-{
-  "operador": "daniel.oliveira",
-  "maquina": "MONITOR-01",
-  "tipo": "FADIGA",
-  "placa": "QSS7G98",
-  "motorista": "EDVANIO DIAS DA SILVA"
-}
-```
+Esse endpoint atualiza apenas o contador e nao cria ocorrencia.
 
-### Receber Ocorrência Do Forms / Power Automate
+### Status da sincronizacao Excel
 
 ```http
-POST /api/forms/ocorrencia
-POST /api/power-automate/ocorrencia
+GET /api/sincronizacao-excel
 ```
 
-```json
-{
-  "texto": "Registro feito por: Filipe Brito - filipe.brito@monfredinitransportes.com.br\nEvento: PARADA PREVENTIVA\nPlaca: UEQ7B48\nMotorista: IDEILDO SILVA TELES\nData/Hora: 28/05/2026 06:54\nObservação: Aguardando retorno."
-}
+Mostra o ultimo ID lido, horario da ultima sincronizacao e eventual erro.
+
+### Executar sincronizacao agora
+
+```http
+POST /api/sincronizacao-excel/executar
 ```
 
-### Atualizar Ocorrência
+Exige usuario administrador.
+
+### Atualizar ocorrencia
 
 ```http
 PATCH /api/ocorrencias/1
 ```
 
-```json
-{
-  "status": "EM_ACOMPANHAMENTO",
-  "etapa": "ACOMPANHAMENTO",
-  "contato_status": "CONTATO_FEITO",
-  "parada_status": "ACEITOU_PARAR"
-}
-```
-
-### Iniciar Timer
+### Iniciar timer
 
 ```http
 POST /api/ocorrencias/1/timer
-```
-
-```json
-{
-  "minutos": 10
-}
 ```

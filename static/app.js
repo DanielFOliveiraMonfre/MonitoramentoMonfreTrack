@@ -1,3 +1,11 @@
+function loadTimerDrafts() {
+    try {
+        return JSON.parse(localStorage.getItem("monfretrack-timer-drafts") || "{}") || {};
+    } catch (_error) {
+        return {};
+    }
+}
+
 const state = {
     selectedOccurrenceId: null,
     selectedOperator: null,
@@ -5,6 +13,8 @@ const state = {
     lastData: null,
     trocaTurno: null,
     occurrenceDrafts: {},
+    timerDrafts: loadTimerDrafts(),
+    timerDragging: false,
     handoverDraft: "",
     handoverReference: "GERAL",
     notifiedTimers: new Set(),
@@ -32,8 +42,26 @@ const ADDITIONAL_FIELD_LABELS = {
     programador: "Qual programador nos atendeu",
 };
 
-function isEditingOccurrenceNote() {
-    return document.activeElement && document.activeElement.id === "occurrence-note";
+const OPERATIONAL_FIELDS = [
+    ["programacao_carga", "7. Programação de carga"],
+    ["tempo_direcao_continua", "8. Tempo de direção contínua"],
+    ["tempo_margem", "9. Tempo de margem"],
+    ["tempo_estimado_destino", "10. Tempo estimado do destino"],
+];
+
+const TREATMENT_FIELDS = [
+    ["motorista_sinal_fadiga", "11. Motorista apresenta sinal de fadiga?"],
+    ["cobertura_celular", "12. Celular está com área de cobertura?"],
+    ["motorista_atendeu", "13. Motorista atendeu à ligação?"],
+    ["mensagem_sirene", "14. Mensagens, rastreador e sirene enviados?"],
+    ["motorista_aceitou_parar", "15. Motorista aceitou parar?"],
+    ["programacao_acionada", "16. Setor programação foi acionado?"],
+    ["programador", "17. Qual programador atendeu?"],
+];
+
+function isEditingOccurrenceControl() {
+    const activeId = document.activeElement && document.activeElement.id;
+    return state.timerDragging || activeId === "occurrence-note" || activeId === "timer-minutes";
 }
 
 function setClock() {
@@ -108,6 +136,38 @@ function formatTimeOnly(value) {
     const date = parseLocalDate(value);
     if (!date) return "--:--";
     return date.toLocaleTimeString("pt-BR", {hour: "2-digit", minute: "2-digit"});
+}
+
+function formatDateOnly(value) {
+    const date = parseLocalDate(value);
+    if (!date) return "Não informado";
+    return date.toLocaleDateString("pt-BR");
+}
+
+function displayValue(value) {
+    const text = String(value ?? "").trim();
+    if (!text || ["N/A", "NA", "-"].includes(text.toUpperCase())) return "Não informado";
+    return text;
+}
+
+function answerTone(value) {
+    const normalized = String(value || "").trim().toUpperCase();
+    if (["SIM", "CONTATO_FEITO", "ACEITOU_PARAR"].includes(normalized)) return "yes";
+    if (["NÃO", "NAO", "SEM_CONTATO", "RECUSOU_PARAR"].includes(normalized)) return "no";
+    if (["PENDENTE", "AGUARDANDO", "EM_CONTATO"].includes(normalized)) return "pending";
+    return "neutral";
+}
+
+function valueBadge(value) {
+    const shown = displayValue(value);
+    return `<span class="answer-badge ${answerTone(value)}">${escapeHtml(shown)}</span>`;
+}
+
+function infoCard(label, value, options = {}) {
+    const classes = ["occurrence-info-card", options.wide ? "wide" : "", options.compact ? "compact" : ""]
+        .filter(Boolean).join(" ");
+    const content = options.badge ? valueBadge(value) : `<strong>${escapeHtml(displayValue(value))}</strong>`;
+    return `<article class="${classes}"><span>${escapeHtml(label)}</span>${content}</article>`;
 }
 
 function occurrenceVisual(oc) {
@@ -463,7 +523,7 @@ function legacyRenderOperation(data) {
         state.selectedOccurrenceId = ocorrencias[0].id;
     }
 
-    if (!isEditingOccurrenceNote()) {
+    if (!isEditingOccurrenceControl()) {
         renderDetail(data);
     }
 }
@@ -524,7 +584,9 @@ function legacyRenderDetail(data) {
             `).join("")}
         </div>
     ` : "";
-    const timerValue = Math.max(5, Math.min(30, Number(oc.timer_minutos || 10)));
+    const timerValue = Math.max(5, Math.min(30, Number(
+        state.timerDrafts[oc.id] ?? oc.timer_minutos ?? 10
+    )));
     const timerDetail = finalizada ? "" : `
         <div class="detail-row"><span>Timer</span><strong>${oc.timer_restante || "-"}</strong></div>
     `;
@@ -613,6 +675,7 @@ function legacyRenderDetail(data) {
     const timerLabel = qs("#timer-minutes-label");
     if (timerRange && timerLabel) {
         timerRange.addEventListener("input", () => {
+            state.timerDrafts[oc.id] = Number(timerRange.value);
             timerLabel.textContent = `${timerRange.value} min`;
         });
     }
@@ -650,12 +713,92 @@ function closeOccurrenceModal() {
 
 function additionalFieldsHtml(oc) {
     const campos = oc.campos_adicionais && typeof oc.campos_adicionais === "object" ? oc.campos_adicionais : {};
-    return Object.entries(ADDITIONAL_FIELD_LABELS).map(([key, label]) => `
-        <div class="detail-row">
-            <span>${escapeHtml(label)}</span>
-            <strong>${escapeHtml(valueOrNA(campos[key]))}</strong>
+    return TREATMENT_FIELDS.map(([key, label]) => infoCard(label, campos[key], {
+        badge: key !== "programador",
+    })).join("");
+}
+
+function operationalFieldsHtml(oc) {
+    const campos = oc.campos_adicionais && typeof oc.campos_adicionais === "object" ? oc.campos_adicionais : {};
+    return OPERATIONAL_FIELDS.map(([key, label]) => infoCard(label, campos[key])).join("");
+}
+
+function occurrenceStep(oc) {
+    if (isFinalizedOccurrence(oc)) return 4;
+    const parada = String(oc.parada_status || "").toUpperCase();
+    const contato = String(oc.contato_status || "").toUpperCase();
+    if (["ACEITOU_PARAR", "RECUSOU_PARAR"].includes(parada)) return 4;
+    if (contato === "CONTATO_FEITO") return 3;
+    if (contato === "SEM_CONTATO") return 2;
+    return 1;
+}
+
+function flowHtml(oc) {
+    const current = occurrenceStep(oc);
+    const steps = [
+        ["Aberta", "Ocorrência registrada"],
+        ["Contato", "Tentativa de contato"],
+        ["Decisão", "Aceitou ou recusou"],
+        ["Finalizada", "Ocorrência encerrada"],
+    ];
+    return `
+        <div class="occurrence-flow" aria-label="Fluxo da ocorrência">
+            ${steps.map(([title, description], index) => {
+                const number = index + 1;
+                const stateClass = number < current || (current === 4 && isFinalizedOccurrence(oc))
+                    ? "complete"
+                    : (number === current ? "current" : "pending");
+                return `
+                    <div class="flow-step ${stateClass}">
+                        <span class="flow-number">${number < current ? "✓" : number}</span>
+                        <div><strong>${title}</strong><small>${description}</small></div>
+                    </div>
+                `;
+            }).join("")}
         </div>
-    `).join("");
+    `;
+}
+
+function quickActionsHtml(oc) {
+    if (isFinalizedOccurrence(oc)) {
+        return `<div class="finalized-banner"><strong>Ocorrência finalizada</strong><span>O histórico foi preservado.</span></div>`;
+    }
+
+    const contato = String(oc.contato_status || "PENDENTE").toUpperCase();
+    const parada = String(oc.parada_status || "PENDENTE").toUpperCase();
+    if (["ACEITOU_PARAR", "RECUSOU_PARAR"].includes(parada)) {
+        return `<button class="occ-action finish" data-action="finalizar">Finalizar ocorrência</button>`;
+    }
+    if (contato === "CONTATO_FEITO") {
+        return `
+            <button class="occ-action accept" data-action="aceitou">Aceitou parar</button>
+            <button class="occ-action refuse" data-action="recusou">Recusou</button>
+        `;
+    }
+    return `
+        <button class="occ-action contact" data-action="contato">Contato feito</button>
+        <button class="occ-action no-contact" data-action="sem-contato">Sem contato</button>
+    `;
+}
+
+function timerPanelHtml(oc, timerValue) {
+    if (isFinalizedOccurrence(oc)) return "";
+    const accepted = String(oc.parada_status || "").toUpperCase() === "ACEITOU_PARAR";
+    const running = String(oc.timer_estado || "").toUpperCase() === "RODANDO";
+    const disabled = accepted && !running ? "" : "disabled";
+    const buttonLabel = running ? `Em andamento: ${escapeHtml(oc.timer_restante || "-")}` : "Iniciar timer";
+    const hint = accepted
+        ? (running ? "Contagem regressiva em andamento." : "Defina o tempo combinado com o motorista.")
+        : "Disponível após a ação Aceitou parar.";
+    return `
+        <section class="occ-side-card timer-picker ${accepted ? "enabled" : "locked"}">
+            <div class="side-card-title"><span>Timer de parada</span><strong id="timer-minutes-label">${timerValue} min</strong></div>
+            <input id="timer-minutes" type="range" min="5" max="30" step="5" value="${timerValue}" ${disabled}>
+            <div class="timer-scale"><span>5 min</span><span>30 min</span></div>
+            <button class="primary-button" data-action="timer" ${disabled}>${buttonLabel}</button>
+            <small>${hint}</small>
+        </section>
+    `;
 }
 
 function timelineHtml(oc) {
@@ -667,15 +810,15 @@ function timelineHtml(oc) {
         ].filter(Boolean);
 
     return `
-        <div class="timeline">
-            <strong>Linha do tempo</strong>
+        <section class="timeline occurrence-timeline">
+            <div class="timeline-heading"><div><span>Histórico</span><strong>Linha do tempo da ocorrência</strong></div><small>${timeline.length} registro(s)</small></div>
             ${timeline.map((item) => `
                 <div class="timeline-item ${String(item.tipo || "").toLowerCase().includes("final") ? "ok" : "info"}">
-                    <span>${formatTimeOnly(item.criado_em)}</span>
-                    <p>${escapeHtml(item.mensagem || "-")}</p>
+                    <time><strong>${formatTimeOnly(item.criado_em)}</strong><span>${formatDateOnly(item.criado_em)}</span></time>
+                    <div><p>${escapeHtml(item.mensagem || "-")}</p><small>${escapeHtml(displayValue(item.operador || item.origem))}</small></div>
                 </div>
             `).join("")}
-        </div>
+        </section>
     `;
 }
 
@@ -747,12 +890,12 @@ function renderOperation(data) {
 
     const modal = qs("#occurrence-modal");
     const modalOpen = modal && !modal.hidden;
-    if (modalOpen && !isEditingOccurrenceNote()) {
+    if (modalOpen && !isEditingOccurrenceControl()) {
         renderDetail(data);
     }
 }
 
-function renderDetail(data) {
+function legacyRenderDetailCurrent(data) {
     const box = qs("#detail-box");
     if (!box) return;
 
@@ -767,7 +910,9 @@ function renderDetail(data) {
     const visual = occurrenceVisual(oc);
     const finalizada = isFinalizedOccurrence(oc);
     const notas = Array.isArray(oc.notas) ? oc.notas : [];
-    const timerValue = Math.max(5, Math.min(30, Number(oc.timer_minutos || 10)));
+    const timerValue = Math.max(5, Math.min(30, Number(
+        state.timerDrafts[oc.id] ?? oc.timer_minutos ?? 10
+    )));
     const obsInicial = valueOrNA(oc.observacao_inicial || oc.observacao);
     const timerDetail = finalizada ? "" : `
         <div class="detail-row"><span>Timer</span><strong>${escapeHtml(oc.timer_restante || "-")}</strong></div>
@@ -878,8 +1023,141 @@ function renderDetail(data) {
     const timerLabel = qs("#timer-minutes-label");
     if (timerRange && timerLabel) {
         timerRange.addEventListener("input", () => {
+            state.timerDrafts[oc.id] = Number(timerRange.value);
             timerLabel.textContent = `${timerRange.value} min`;
         });
+    }
+
+    const noteField = qs("#occurrence-note");
+    if (noteField) {
+        noteField.value = state.occurrenceDrafts[oc.id] || "";
+        noteField.addEventListener("input", () => {
+            state.occurrenceDrafts[oc.id] = noteField.value;
+        });
+    }
+}
+
+function renderDetail(data) {
+    const box = qs("#detail-box");
+    if (!box) return;
+
+    const base = data.ocorrencias_operacao || data.ocorrencias_abertas || [];
+    const oc = base.find((item) => item.id === state.selectedOccurrenceId);
+    if (!oc) {
+        box.className = "detail-box empty-detail";
+        box.innerHTML = `<strong>Nenhuma ocorrência selecionada</strong>`;
+        return;
+    }
+
+    const campos = oc.campos_adicionais && typeof oc.campos_adicionais === "object" ? oc.campos_adicionais : {};
+    const finalizada = isFinalizedOccurrence(oc);
+    const eventDate = oc.data_hora || oc.horario_alerta || oc.criado_em;
+    const timerValue = Math.max(5, Math.min(30, Number(
+        state.timerDrafts[oc.id] ?? oc.timer_minutos ?? 30
+    )));
+    const obsInicial = displayValue(oc.observacao_inicial || oc.observacao);
+    const modalTitle = qs("#occurrence-modal-title");
+    if (modalTitle) modalTitle.textContent = `Ocorrência #${oc.id}`;
+
+    const adminMenu = currentUser.admin ? `
+        <details class="admin-menu">
+            <summary aria-label="Ações administrativas">•••</summary>
+            <div><span>Ações administrativas</span><button class="danger-button" data-action="delete-occurrence">Apagar ocorrência</button></div>
+        </details>
+    ` : "";
+
+    box.className = "detail-box occurrence-detail-v2";
+    box.innerHTML = `
+        <header class="occurrence-hero">
+            <div class="occurrence-identity">
+                <div class="occurrence-type-line"><span class="type-icon">!</span><div><strong>${escapeHtml(occurrenceType(oc))} <i>•</i> ${escapeHtml(statusLabel(oc.status))}</strong><small>${escapeHtml(statusLabel(oc.etapa))}</small></div></div>
+                <div class="occurrence-driver"><strong>${escapeHtml(displayValue(oc.placa))}</strong><span>•</span><strong>${escapeHtml(displayValue(oc.motorista))}</strong></div>
+            </div>
+            <div class="hero-stat"><span>Tempo em aberto</span><strong>${escapeHtml(oc.tempo_ocorrencia || oc.idade || "-")}</strong><small>Desde ${formatDateOnly(eventDate)}, ${formatTimeOnly(eventDate)}</small></div>
+            <div class="hero-stat owner"><span>Responsável</span><strong>${escapeHtml(operatorName(oc))}</strong><small>${escapeHtml(displayValue(oc.operador_email))}</small></div>
+            ${adminMenu}
+        </header>
+
+        ${flowHtml(oc)}
+
+        <div class="occurrence-workspace">
+            <main class="occurrence-main-column">
+                <section class="occurrence-section">
+                    <div class="section-title"><span>01</span><div><strong>Informações da ocorrência</strong><small>Dados principais recebidos do Forms</small></div></div>
+                    <div class="occurrence-card-grid primary-info">
+                        ${infoCard("1. Evento", occurrenceType(oc))}
+                        ${infoCard("2. Data", formatDateOnly(eventDate))}
+                        ${infoCard("3. Hora", formatTimeOnly(eventDate))}
+                        ${infoCard("4. Placa", oc.placa)}
+                        ${infoCard("5. Motorista", oc.motorista, {wide: true})}
+                        ${infoCard("6. Cliente", campos.contrato_programacao)}
+                    </div>
+                </section>
+
+                <section class="occurrence-section">
+                    <div class="section-title"><span>02</span><div><strong>Dados operacionais</strong><small>Programação e tempos da viagem</small></div></div>
+                    <div class="occurrence-card-grid operational-info">${operationalFieldsHtml(oc)}</div>
+                </section>
+
+                <section class="occurrence-section">
+                    <div class="section-title"><span>03</span><div><strong>Tratativa e contato</strong><small>Respostas operacionais do atendimento</small></div></div>
+                    <div class="occurrence-card-grid treatment-info">
+                        ${additionalFieldsHtml(oc)}
+                        ${infoCard("18. Observação inicial", obsInicial === "Não informado" ? "Sem observações" : obsInicial, {wide: true})}
+                    </div>
+                </section>
+
+                ${timelineHtml(oc)}
+
+                <section class="note-compose occurrence-note-compose">
+                    <div class="section-title"><span>+</span><div><strong>Adicionar ao histórico</strong><small>Registre observações, pendências e combinados</small></div></div>
+                    <div class="note-fields">
+                        <select id="occurrence-note-type" aria-label="Tipo de registro">
+                            <option value="Observação">Observação</option>
+                            <option value="Pendência">Pendência</option>
+                            <option value="Combinado">Combinado com motorista</option>
+                        </select>
+                        <textarea id="occurrence-note" rows="3" placeholder="Descreva o registro de forma objetiva..."></textarea>
+                        <button class="primary-button" id="send-occurrence-note">Registrar no histórico</button>
+                    </div>
+                </section>
+            </main>
+
+            <aside class="occurrence-side-column">
+                <section class="occ-side-card quick-actions-card">
+                    <div class="side-card-title"><span>Ações da ocorrência</span><small>Etapa atual: ${escapeHtml(statusLabel(oc.etapa))}</small></div>
+                    <div class="occurrence-quick-actions">${quickActionsHtml(oc)}</div>
+                </section>
+                ${timerPanelHtml(oc, timerValue)}
+                <section class="occ-side-card status-summary">
+                    <div class="side-card-title"><span>Status atual</span></div>
+                    <div><span>Contato</span>${valueBadge(oc.contato_status)}</div>
+                    <div><span>Parada</span>${valueBadge(oc.parada_status)}</div>
+                    ${finalizada ? `<div><span>Finalizada em</span><strong>${escapeHtml(formatDateTime(oc.finalizado_em || oc.atualizado_em))}</strong></div>` : ""}
+                </section>
+            </aside>
+        </div>
+    `;
+
+    box.querySelectorAll("button[data-action]").forEach((button) => {
+        button.addEventListener("click", () => handleOccurrenceAction(oc.id, button.dataset.action));
+    });
+
+    const noteButton = qs("#send-occurrence-note");
+    if (noteButton) noteButton.addEventListener("click", () => sendOccurrenceNote(oc.id));
+
+    const timerRange = qs("#timer-minutes");
+    const timerLabel = qs("#timer-minutes-label");
+    if (timerRange && timerLabel) {
+        const storeDraft = () => {
+            state.timerDrafts[oc.id] = Number(timerRange.value);
+            localStorage.setItem("monfretrack-timer-drafts", JSON.stringify(state.timerDrafts));
+            timerLabel.textContent = `${timerRange.value} min`;
+        };
+        timerRange.addEventListener("pointerdown", () => { state.timerDragging = true; });
+        timerRange.addEventListener("pointerup", () => { state.timerDragging = false; storeDraft(); });
+        timerRange.addEventListener("input", storeDraft);
+        timerRange.addEventListener("change", storeDraft);
     }
 
     const noteField = qs("#occurrence-note");
@@ -894,11 +1172,13 @@ function renderDetail(data) {
 async function sendOccurrenceNote(id) {
     const note = qs("#occurrence-note");
     if (!note || !note.value.trim()) return;
+    const noteType = qs("#occurrence-note-type");
+    const prefix = noteType ? `[${noteType.value}] ` : "";
 
     const response = await fetch(`/api/ocorrencias/${id}/notas`, {
         method: "POST",
         headers: {"Content-Type": "application/json"},
-        body: JSON.stringify({operador: DEFAULT_OPERATOR, mensagem: note.value.trim()}),
+        body: JSON.stringify({operador: DEFAULT_OPERATOR, mensagem: `${prefix}${note.value.trim()}`}),
     });
     const data = await response.json().catch(() => ({}));
 
@@ -939,17 +1219,34 @@ async function handleOccurrenceAction(id, action) {
         state.selectedOccurrenceId = null;
         closeOccurrenceModal();
         delete state.occurrenceDrafts[id];
+        delete state.timerDrafts[id];
+        localStorage.setItem("monfretrack-timer-drafts", JSON.stringify(state.timerDrafts));
         return refreshAll();
     }
 
     if (action === "timer") {
         const timerRange = qs("#timer-minutes");
-        const minutos = Math.max(5, Math.min(30, Number(timerRange ? timerRange.value : 10)));
-        await fetch(`/api/ocorrencias/${id}/timer`, {
+        const minutos = Math.max(5, Math.min(30, Number(
+            timerRange ? timerRange.value : (state.timerDrafts[id] ?? 10)
+        )));
+        state.timerDrafts[id] = minutos;
+
+        const response = await fetch(`/api/ocorrencias/${id}/timer`, {
             method: "POST",
             headers: {"Content-Type": "application/json"},
             body: JSON.stringify({minutos}),
         });
+        const result = await response.json().catch(() => ({}));
+
+        if (!response.ok || !result.ok) {
+            showToast("Nao foi possivel salvar o timer. Tente novamente.");
+            return;
+        }
+
+        const salvo = Number(result.timer && result.timer.minutos);
+        delete state.timerDrafts[id];
+        localStorage.setItem("monfretrack-timer-drafts", JSON.stringify(state.timerDrafts));
+        showToast(`Timer de ${Number.isFinite(salvo) ? salvo : minutos} min iniciado.`);
         return refreshAll();
     }
 
@@ -961,11 +1258,16 @@ async function handleOccurrenceAction(id, action) {
         finalizar: {status: "FINALIZADA", etapa: "FINALIZADA"},
     };
 
-    await fetch(`/api/ocorrencias/${id}`, {
+    const response = await fetch(`/api/ocorrencias/${id}`, {
         method: "PATCH",
         headers: {"Content-Type": "application/json"},
         body: JSON.stringify(payloads[action] || {}),
     });
+
+    if (!response.ok) {
+        showToast("Não foi possível atualizar a ocorrência.");
+        return;
+    }
 
     return refreshAll();
 }

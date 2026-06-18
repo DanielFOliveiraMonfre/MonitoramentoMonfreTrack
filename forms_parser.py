@@ -18,6 +18,7 @@ CAMPOS_ADICIONAIS_PADRAO = {
     "motorista_aceitou_parar": "Motorista aceitou parar",
     "programacao_acionada": "Setor Programacao foi acionado",
     "programador": "Qual programador nos atendeu",
+    "evidencia": "Evidencia",
 }
 
 
@@ -34,6 +35,7 @@ MAPA_CAMPOS = {
     "motorista aceitou parar": "motorista_aceitou_parar",
     "setor programacao foi acionado": "programacao_acionada",
     "qual programador nos atendeu": "programador",
+    "anexar evidencia": "evidencia",
 }
 
 

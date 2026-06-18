@@ -6,7 +6,7 @@ import os
 from flask import Flask, jsonify, redirect, render_template, request, send_file, session, url_for
 
 import database
-from forms_parser import parse_forms_payload
+import excel_sync
 
 
 app = Flask(__name__)
@@ -173,30 +173,36 @@ def api_listar_ocorrencias():
 
 @app.post("/api/ocorrencias")
 def api_criar_ocorrencia():
-    payload = request.get_json(silent=True) or {}
-    if usuario_logado() and not payload.get("operador"):
-        payload["operador"] = usuario_logado()["nome"]
-    ocorrencia_id = database.criar_ocorrencia(payload)
-    return jsonify({"ok": True, "ocorrencia_id": ocorrencia_id})
+    return jsonify({
+        "ok": False,
+        "desativado": True,
+        "erro": "Criacao direta desativada. As ocorrencias agora sao importadas somente do Excel do Forms.",
+    }), 410
 
 
 @app.post("/api/forms/ocorrencia")
 @app.post("/api/power-automate/ocorrencia")
 def api_forms_ocorrencia():
-    if os.environ.get("RENDER") and not database.USING_POSTGRES:
-        return jsonify({
-            "ok": False,
-            "erro": "DATABASE_URL nao configurado. O Render precisa de PostgreSQL persistente para salvar historico.",
-        }), 503
+    return jsonify({
+        "ok": False,
+        "desativado": True,
+        "erro": "Webhook desativado. As ocorrencias agora sao importadas somente do Excel do Forms.",
+    }), 410
 
-    payload = request.get_json(silent=True) or {}
-    try:
-        dados = parse_forms_payload(payload)
-        ocorrencia_id = database.criar_ocorrencia_forms(dados)
-    except Exception as exc:
-        return jsonify({"ok": False, "erro": str(exc)}), 400
 
-    return jsonify({"ok": True, "ocorrencia_id": ocorrencia_id, "ocorrencia": dados})
+@app.get("/api/sincronizacao-excel")
+@login_required
+def api_status_sincronizacao_excel():
+    return jsonify(excel_sync.status_sincronizador())
+
+
+@app.post("/api/sincronizacao-excel/executar")
+def api_executar_sincronizacao_excel():
+    usuario = usuario_logado()
+    if not usuario or not usuario.get("admin"):
+        return jsonify({"ok": False, "erro": "admin_required"}), 403
+    resultado = excel_sync.sincronizar_planilha()
+    return jsonify(resultado), 200 if resultado.get("ok") else 503
 
 
 @app.patch("/api/ocorrencias/ordem")
@@ -209,6 +215,9 @@ def api_reordenar_ocorrencias():
 @app.patch("/api/ocorrencias/<int:ocorrencia_id>")
 def api_atualizar_ocorrencia(ocorrencia_id):
     payload = request.get_json(silent=True) or {}
+    usuario = usuario_logado()
+    if usuario:
+        payload["_audit_operador"] = usuario["nome"]
     database.atualizar_ocorrencia(ocorrencia_id, payload)
     return jsonify({"ok": True, "ocorrencia_id": ocorrencia_id})
 
@@ -226,10 +235,23 @@ def api_apagar_ocorrencia(ocorrencia_id):
 @app.post("/api/ocorrencias/<int:ocorrencia_id>/timer")
 def api_iniciar_timer(ocorrencia_id):
     payload = request.get_json(silent=True) or {}
-    minutos = int(payload.get("minutos") or 10)
+    try:
+        minutos = int(payload.get("minutos") or 10)
+    except (TypeError, ValueError):
+        return jsonify({"ok": False, "erro": "minutos_invalidos"}), 400
+
     minutos = max(5, min(30, minutos))
-    database.iniciar_timer_ocorrencia(ocorrencia_id, minutos)
-    return jsonify({"ok": True, "ocorrencia_id": ocorrencia_id})
+    usuario = usuario_logado()
+    timer = database.iniciar_timer_ocorrencia(
+        ocorrencia_id,
+        minutos,
+        operador=usuario["nome"] if usuario else None,
+    )
+    return jsonify({
+        "ok": True,
+        "ocorrencia_id": ocorrencia_id,
+        "timer": timer,
+    })
 
 
 @app.post("/api/ocorrencias/<int:ocorrencia_id>/notas")
@@ -271,11 +293,24 @@ def api_apagar_troca_turno_nota(nota_id):
     return jsonify({"ok": True, "nota_id": nota_id})
 
 
-def criar_app():
-    database.init_db()
+_servicos_iniciados = False
+
+
+def inicializar_servicos():
+    global _servicos_iniciados
+    if not _servicos_iniciados:
+        database.init_db()
+        excel_sync.iniciar_sincronizador()
+        _servicos_iniciados = True
     return app
 
 
+def criar_app():
+    return inicializar_servicos()
+
+
+inicializar_servicos()
+
+
 if __name__ == "__main__":
-    criar_app()
-    app.run(host="0.0.0.0", port=5000, debug=True)
+    app.run(host="0.0.0.0", port=5000, debug=True, use_reloader=False)
