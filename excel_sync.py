@@ -16,7 +16,39 @@ import database
 from forms_parser import slug_operador, valor_ou_na
 
 
-PLANILHA_URL = (os.environ.get("FORMS_PLANILHA_URL") or "").strip()
+TOKEN_COMPARTILHAMENTO_ATUALIZADO = {
+    # Mantem o Render funcionando mesmo se a env ainda estiver com o link antigo.
+    "e5RET3": "eJkANr",
+}
+
+
+def _corrigir_link_planilha(url):
+    partes = urlsplit(str(url or "").strip())
+    if "sharepoint.com" not in partes.netloc.lower():
+        return str(url or "").strip()
+
+    parametros = parse_qsl(partes.query, keep_blank_values=True)
+    atualizados = []
+    mudou = False
+    for chave, valor in parametros:
+        if chave.lower() == "e" and valor in TOKEN_COMPARTILHAMENTO_ATUALIZADO:
+            atualizados.append((chave, TOKEN_COMPARTILHAMENTO_ATUALIZADO[valor]))
+            mudou = True
+        else:
+            atualizados.append((chave, valor))
+
+    if not mudou:
+        return urlunsplit(partes)
+    return urlunsplit((
+        partes.scheme,
+        partes.netloc,
+        partes.path,
+        urlencode(atualizados),
+        partes.fragment,
+    ))
+
+
+PLANILHA_URL = _corrigir_link_planilha(os.environ.get("FORMS_PLANILHA_URL") or "")
 FONTE = (os.environ.get("FORMS_PLANILHA_FONTE") or "forms_ocorrencias").strip()
 # O Forms precisa aparecer rapidamente na operacao; no Render o ciclo e fixo.
 INTERVALO = 15
