@@ -517,6 +517,18 @@ def linha_excel_importada(fonte, linha_id):
     return bool(row)
 
 
+def ocorrencia_external_id_existe(external_id):
+    if not external_id:
+        return False
+
+    with get_conn() as conn:
+        row = conn.execute(
+            "SELECT id FROM ocorrencias WHERE external_id = ?",
+            (external_id,),
+        ).fetchone()
+    return bool(row)
+
+
 def registrar_linha_excel_importada(
     fonte,
     linha_id,
@@ -531,6 +543,25 @@ def registrar_linha_excel_importada(
             (fonte, int(linha_id)),
         ).fetchone()
         if existente:
+            conn.execute(
+                """
+                UPDATE importacoes_excel
+                   SET ocorrencia_id = COALESCE(?, ocorrencia_id),
+                       payload_hash = COALESCE(?, payload_hash),
+                       status = ?,
+                       erro = ?,
+                       importado_em = ?
+                 WHERE id = ?
+                """,
+                (
+                    ocorrencia_id,
+                    payload_hash,
+                    (status or "IMPORTADA").strip().upper(),
+                    erro,
+                    agora_iso(),
+                    existente["id"],
+                ),
+            )
             return existente["id"]
 
         return inserir_retorna_id(
@@ -654,7 +685,7 @@ def criar_ocorrencia(payload):
             if existente:
                 return existente["id"]
 
-        if tipo == "FADIGA":
+        if tipo == "FADIGA" and origem not in {"FORMS", "POWER_AUTOMATE", "EXCEL_FORMS"}:
             existente = buscar_fadiga_aberta(conn, placa, motorista)
             if existente:
                 ultimo = parse_dt(existente["ultimo_alerta_em"])

@@ -316,7 +316,9 @@ def sincronizar_planilha(url=None, fonte=FONTE):
 
         ultimo_id = int(estado.get("ultimo_id") or 0)
         novas = [linha for linha in linhas if (_id_linha(linha) or 0) > ultimo_id]
+        ids_novas = {_id_linha(linha) for linha in novas}
         recuperou_linha_corte = False
+        recuperou_importacao_sem_card = 0
         if (
             not inicializado
             and ultimo_id > 0
@@ -328,13 +330,37 @@ def sincronizar_planilha(url=None, fonte=FONTE):
             )
             if linha_corte is not None:
                 novas.insert(0, linha_corte)
+                ids_novas.add(ultimo_id)
                 recuperou_linha_corte = True
+
+        if not inicializado and ultimo_id > 0:
+            inicio_janela = max(0, ultimo_id - 50)
+            recuperaveis = []
+            for linha in linhas:
+                linha_id = _id_linha(linha) or 0
+                external_id = f"excel:{fonte}:{linha_id}"
+                if (
+                    inicio_janela <= linha_id <= ultimo_id
+                    and linha_id not in ids_novas
+                    and database.linha_excel_importada(fonte, linha_id)
+                    and not database.ocorrencia_external_id_existe(external_id)
+                ):
+                    recuperaveis.append(linha)
+                    ids_novas.add(linha_id)
+
+            if recuperaveis:
+                novas = recuperaveis + novas
+                recuperou_importacao_sem_card = len(recuperaveis)
         importados = 0
         ignorados = 0
 
         for linha in novas:
             linha_id = _id_linha(linha)
-            if database.linha_excel_importada(fonte, linha_id):
+            external_id = f"excel:{fonte}:{linha_id}"
+            if (
+                database.linha_excel_importada(fonte, linha_id)
+                and database.ocorrencia_external_id_existe(external_id)
+            ):
                 database.atualizar_estado_sincronizacao_excel(fonte, linha_id)
                 ultimo_id = max(ultimo_id, linha_id)
                 continue
@@ -373,6 +399,7 @@ def sincronizar_planilha(url=None, fonte=FONTE):
             "importados": importados,
             "ignorados": ignorados,
             "recuperou_linha_corte": recuperou_linha_corte,
+            "recuperou_importacao_sem_card": recuperou_importacao_sem_card,
         }
     except Exception as exc:
         erro = f"{type(exc).__name__}: {exc}"
