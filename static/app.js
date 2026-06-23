@@ -1647,7 +1647,17 @@ async function loadData() {
         state.lastData = data;
 
         const status = qs("#sidebar-status");
-        if (status) status.textContent = `Atualizado ${new Date().toLocaleTimeString("pt-BR")}`;
+        if (status) {
+            const sync = data.sincronizacao_excel || {};
+            const tentativa = sync.ultima_tentativa_dashboard || {};
+            if (sync.ultimo_erro) {
+                status.textContent = `Excel erro: ${String(sync.ultimo_erro).slice(0, 60)}`;
+            } else if (Number(tentativa.importados || 0) > 0) {
+                status.textContent = `Excel: ${tentativa.importados} nova(s)`;
+            } else {
+                status.textContent = `Atualizado ${new Date().toLocaleTimeString("pt-BR")}`;
+            }
+        }
 
         renderDashboard(data);
         renderOperation(data);

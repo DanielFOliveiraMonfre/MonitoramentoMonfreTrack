@@ -125,7 +125,11 @@ def troca_turno():
 
 @app.get("/api/dashboard")
 def api_dashboard():
-    return jsonify(database.resumo_dashboard(history_hours=obter_history_hours()))
+    sync_resultado = excel_sync.sincronizar_se_necessario()
+    payload = database.resumo_dashboard(history_hours=obter_history_hours())
+    payload["sincronizacao_excel"] = excel_sync.status_sincronizador()
+    payload["sincronizacao_excel"]["ultima_tentativa_dashboard"] = sync_resultado
+    return jsonify(payload)
 
 
 @app.get("/api/operadores")
@@ -160,9 +164,14 @@ def api_alerta_tratado():
 
 @app.get("/api/ocorrencias")
 def api_listar_ocorrencias():
+    sync_resultado = excel_sync.sincronizar_se_necessario()
     abertas = request.args.get("abertas") == "1"
     finalizadas = request.args.get("finalizadas") == "1"
     return jsonify({
+        "sincronizacao_excel": {
+            **excel_sync.status_sincronizador(),
+            "ultima_tentativa": sync_resultado,
+        },
         "ocorrencias": database.listar_ocorrencias(
             apenas_abertas=abertas,
             apenas_finalizadas=finalizadas,

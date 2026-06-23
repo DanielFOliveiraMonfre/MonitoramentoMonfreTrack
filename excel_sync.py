@@ -2,6 +2,7 @@
 
 import hashlib
 import os
+import time
 import threading
 import unicodedata
 from datetime import date, datetime, time as datetime_time
@@ -57,6 +58,8 @@ TIMEOUT = max(10, int(os.environ.get("FORMS_PLANILHA_TIMEOUT") or 30))
 _thread = None
 _thread_lock = threading.Lock()
 _sync_lock = threading.Lock()
+_sync_demanda_lock = threading.Lock()
+_ultima_sync_demanda = 0.0
 _parar = threading.Event()
 _status_lock = threading.Lock()
 _status = {
@@ -67,6 +70,7 @@ _status = {
     "ultimo_erro": None,
     "ultimo_id": None,
     "importados_ultima_execucao": 0,
+    "ultimo_resultado": None,
 }
 
 
@@ -390,6 +394,13 @@ def sincronizar_planilha(url=None, fonte=FONTE):
             ultimo_erro=None,
             ultimo_id=ultimo_id,
             importados_ultima_execucao=importados,
+            ultimo_resultado={
+                "ok": True,
+                "ultimo_id": ultimo_id,
+                "novas_linhas": len(novas),
+                "importados": importados,
+                "ignorados": ignorados,
+            },
         )
         return {
             "ok": True,
@@ -404,10 +415,34 @@ def sincronizar_planilha(url=None, fonte=FONTE):
     except Exception as exc:
         erro = f"{type(exc).__name__}: {exc}"
         database.registrar_erro_sincronizacao_excel(fonte, erro)
-        _atualizar_status(ativo=False, ultimo_erro=erro, importados_ultima_execucao=0)
+        _atualizar_status(
+            ativo=False,
+            ultimo_erro=erro,
+            importados_ultima_execucao=0,
+            ultimo_resultado={"ok": False, "erro": erro},
+        )
         return {"ok": False, "erro": erro}
     finally:
         _sync_lock.release()
+
+
+def sincronizar_se_necessario(intervalo_minimo=INTERVALO):
+    global _ultima_sync_demanda
+
+    if not PLANILHA_URL:
+        return {"ok": False, "configurado": False, "erro": "FORMS_PLANILHA_URL nao configurada"}
+
+    agora_monotonic = time.monotonic()
+    with _sync_demanda_lock:
+        if agora_monotonic - _ultima_sync_demanda < intervalo_minimo:
+            return {"ok": True, "pulou": True, "motivo": "intervalo_minimo"}
+        _ultima_sync_demanda = agora_monotonic
+
+    resultado = sincronizar_planilha()
+    if resultado.get("ocupado"):
+        with _sync_demanda_lock:
+            _ultima_sync_demanda = 0.0
+    return resultado
 
 
 def _loop_sincronizacao():
