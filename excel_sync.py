@@ -5,7 +5,7 @@ import os
 import time
 import threading
 import unicodedata
-from datetime import date, datetime, time as datetime_time
+from datetime import date, datetime, time as datetime_time, timedelta
 from io import BytesIO
 from http.cookiejar import CookieJar
 from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
@@ -128,6 +128,29 @@ def _combinar_data_hora(data_valor, hora_valor, fallback=None):
     if isinstance(fallback, datetime):
         return fallback.replace(microsecond=0).isoformat(sep=" ")
     return database.agora_iso()
+
+
+def _data_conclusao_linha(linha):
+    valor = _valor(linha, "Hora de conclusao", padrao=None)
+    if isinstance(valor, datetime):
+        return valor.replace(microsecond=0)
+
+    texto = _texto(valor, "")
+    for formato in ("%Y-%m-%d %H:%M:%S", "%d/%m/%Y %H:%M:%S", "%m/%d/%Y %H:%M:%S"):
+        try:
+            return datetime.strptime(texto, formato)
+        except ValueError:
+            continue
+    return None
+
+
+def _linha_resposta_recente(linha, horas=24):
+    conclusao = _data_conclusao_linha(linha)
+    if not conclusao:
+        return False
+
+    agora = database.agora_dt()
+    return agora - timedelta(hours=horas) <= conclusao <= agora + timedelta(minutes=10)
 
 
 def _valor(linha, *nomes, padrao="N/A"):
@@ -323,6 +346,7 @@ def sincronizar_planilha(url=None, fonte=FONTE):
         ids_novas = {_id_linha(linha) for linha in novas}
         recuperou_linha_corte = False
         recuperou_importacao_sem_card = 0
+        recuperou_resposta_recente_sem_card = 0
         if (
             not inicializado
             and ultimo_id > 0
@@ -338,23 +362,28 @@ def sincronizar_planilha(url=None, fonte=FONTE):
                 recuperou_linha_corte = True
 
         if not inicializado and ultimo_id > 0:
-            inicio_janela = max(0, ultimo_id - 50)
+            inicio_janela = max(0, max(ultimo_id, maior_id) - 80)
             recuperaveis = []
             for linha in linhas:
                 linha_id = _id_linha(linha) or 0
                 external_id = f"excel:{fonte}:{linha_id}"
+                importada_sem_card = database.linha_excel_importada(fonte, linha_id)
+                resposta_recente_sem_card = _linha_resposta_recente(linha)
                 if (
                     inicio_janela <= linha_id <= ultimo_id
                     and linha_id not in ids_novas
-                    and database.linha_excel_importada(fonte, linha_id)
+                    and (importada_sem_card or resposta_recente_sem_card)
                     and not database.ocorrencia_external_id_existe(external_id)
                 ):
                     recuperaveis.append(linha)
                     ids_novas.add(linha_id)
+                    if importada_sem_card:
+                        recuperou_importacao_sem_card += 1
+                    elif resposta_recente_sem_card:
+                        recuperou_resposta_recente_sem_card += 1
 
             if recuperaveis:
                 novas = recuperaveis + novas
-                recuperou_importacao_sem_card = len(recuperaveis)
         importados = 0
         ignorados = 0
 
@@ -411,6 +440,7 @@ def sincronizar_planilha(url=None, fonte=FONTE):
             "ignorados": ignorados,
             "recuperou_linha_corte": recuperou_linha_corte,
             "recuperou_importacao_sem_card": recuperou_importacao_sem_card,
+            "recuperou_resposta_recente_sem_card": recuperou_resposta_recente_sem_card,
         }
     except Exception as exc:
         erro = f"{type(exc).__name__}: {exc}"

@@ -1427,7 +1427,9 @@ def enriquecer_ocorrencia(row):
         timer_estado = "RODANDO" if restante > 0 else "VENCIDO"
 
     duracao_aberta = 0
-    criado = parse_dt(item.get("data_hora") or row["criado_em"])
+    # Para a operacao, o SLA conta desde que a ocorrencia entrou no painel.
+    # A data/hora do Forms pode ser o horario do evento e ficar fora da janela visual.
+    criado = parse_dt(row["criado_em"] or item.get("data_hora"))
     if criado:
         duracao_aberta = int((agora_dt() - criado).total_seconds())
 
@@ -1479,19 +1481,23 @@ def listar_ocorrencias(apenas_abertas=False, apenas_finalizadas=False, limite=80
     params = []
     history_hours = normalizar_horas_historico(history_hours)
     limite_painel = (agora_dt() - timedelta(hours=history_hours)).isoformat(sep=" ")
-    campo_historico = """
-        CASE
-            WHEN o.status IN ('FINALIZADA', 'CANCELADA')
-                THEN COALESCE(o.finalizado_em, o.atualizado_em, o.criado_em)
-            ELSE COALESCE(o.data_hora, o.horario_alerta, o.criado_em)
-        END
-    """
-
     if apenas_abertas:
         filtros.append("o.status NOT IN ('FINALIZADA', 'CANCELADA')")
     elif apenas_finalizadas:
         filtros.append("o.status IN ('FINALIZADA', 'CANCELADA')")
 
+    if apenas_finalizadas:
+        campo_historico = "COALESCE(o.finalizado_em, o.atualizado_em, o.criado_em)"
+    elif apenas_abertas:
+        campo_historico = "COALESCE(o.criado_em, o.atualizado_em, o.data_hora, o.horario_alerta)"
+    else:
+        campo_historico = """
+            CASE
+                WHEN o.status IN ('FINALIZADA', 'CANCELADA')
+                    THEN COALESCE(o.finalizado_em, o.atualizado_em, o.criado_em)
+                ELSE COALESCE(o.criado_em, o.atualizado_em, o.data_hora, o.horario_alerta)
+            END
+        """
     filtros.append(f"{campo_historico} >= ?")
     params.append(limite_painel)
 
